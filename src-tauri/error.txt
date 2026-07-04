@@ -1,0 +1,31 @@
+    Checking donghua-nexus v0.1.0 (D:\Documents\GitHub\donghua-nexus\src-tauri)
+error[E0432]: unresolved import `tokio::time`
+   --> src\mpv_ipc_client.rs:4:12
+    |
+  4 | use tokio::time::{sleep, Duration};
+    |            ^^^^ could not find `time` in `tokio`
+    |
+note: found an item that was configured out
+   --> C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.52.3\src\lib.rs:566:13
+    |
+566 |     pub mod time;
+    |             ^^^^
+    |
+   ::: C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.52.3\src\macros\cfg.rs:580:19
+    |
+580 |             #[cfg(feature = "time")]
+    |                   ---------------- the item is gated behind the `time` feature
+
+warning: variable does not need to be mutable
+  --> src\mpv_ipc_client.rs:48:13
+   |
+48 |         let mut ready = self.pipe.ready(tokio::io::Interest::WRITABLE).await
+   |             ----^^^^^
+   |             |
+   |             help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+For more information about this error, try `rustc --explain E0432`.
+warning: `donghua-nexus` (lib) generated 1 warning
+error: could not compile `donghua-nexus` (lib) due to 1 previous error; 1 warning emitted
