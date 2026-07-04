@@ -108,10 +108,16 @@ impl MpvIpcClient {
         self.send_command(cmd).await
     }
 
-    pub async fn stop(&mut self) -> Result<(), String> {
-        let cmd = serde_json::json!({
-            "command": ["quit"]
-        });
+    pub async fn unload(&mut self) -> Result<(), String> {
+        // Sends "stop" — unloads the current file but keeps MPV alive in
+        // --idle mode, preserving the named pipe connection for fast reload.
+        let cmd = serde_json::json!({ "command": ["stop"] });
+        self.send_command(cmd).await
+    }
+
+    pub async fn quit(&mut self) -> Result<(), String> {
+        // Terminates the MPV process entirely.
+        let cmd = serde_json::json!({ "command": ["quit"] });
         self.send_command(cmd).await
     }
 }

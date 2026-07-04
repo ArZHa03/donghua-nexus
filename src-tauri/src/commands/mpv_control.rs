@@ -86,3 +86,16 @@ pub async fn mpv_frame_step(direction: String, state: State<'_, MpvState>) -> Re
     }
     Ok(())
 }
+
+#[tauri::command]
+pub async fn mpv_unload(state: State<'_, MpvState>) -> Result<(), String> {
+    let mut client_opt = state.client.lock().await;
+    if let Some(client) = client_opt.as_mut() {
+        if let Err(e) = client.unload().await {
+            *client_opt = None;
+            return Err(e);
+        }
+    }
+    // If MPV is not running, treat as no-op (project already cleared)
+    Ok(())
+}

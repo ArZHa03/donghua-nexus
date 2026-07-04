@@ -2,114 +2,114 @@
   import { onMount, onDestroy } from 'svelte';
   import { tauriCommands } from '../../tauri_commands';
   import { playbackStore } from '../../stores/playback_store.svelte';
-  import { projectStore } from '../../stores/project_store.svelte';
 
-  // Note: True sync from MPV back to Svelte would require Tauri Events.
-  // For M1, we click to play/pause in Svelte and send commands to MPV.
-  
+  // ── MPV window bounds sync ────────────────────────────────────────────────
+  // ResizeObserver tracks the DOM container so the native MPV window
+  // stays perfectly aligned with the preview panel as the layout changes.
+
   let videoContainer: HTMLDivElement | undefined = $state();
   let resizeObserver: ResizeObserver | undefined;
 
   onMount(() => {
     resizeObserver = new ResizeObserver((entries) => {
-      for (let entry of entries) {
-        if (entry.target === videoContainer && playbackStore.mpv_started) {
-          const rect = videoContainer.getBoundingClientRect();
+      for (const entry of entries) {
+        if (entry.target === videoContainer && playbackStore.isReady) {
+          const rect = videoContainer!.getBoundingClientRect();
           tauriCommands.updateMpvBounds(rect.x, rect.y, rect.width, rect.height)
-            .catch(err => console.error("Failed to update MPV bounds:", err));
+            .catch(err => console.error('Failed to update MPV bounds:', err));
         }
       }
     });
-
-    if (videoContainer) {
-      resizeObserver.observe(videoContainer);
-    }
+    if (videoContainer) resizeObserver.observe(videoContainer);
   });
 
   onDestroy(() => {
-    if (resizeObserver) {
-      resizeObserver.disconnect();
-    }
+    resizeObserver?.disconnect();
   });
-  
-  async function handleStart() {
-    if (!playbackStore.mpv_started) {
-      try {
-        await tauriCommands.mpvStart();
-        playbackStore.mpv_started = true;
-        
-        // Auto load currently selected episode & segment (or first episode as fallback)
-        const activeEp = projectStore.selectedEpisode || projectStore.episodes[0];
-        if (activeEp) {
-          const segs = projectStore.segmentsByEpisode.get(activeEp.id) ?? [];
-          const targetSeg = projectStore.selectedSegment || segs[0];
-          const startMs = targetSeg ? targetSeg.source_start_ms : 0;
-          await tauriCommands.mpvLoadFile(activeEp.path, startMs / 1000);
-        }
-        
-        // Initial bounds sync
-        if (videoContainer) {
-          const rect = videoContainer.getBoundingClientRect();
-          await tauriCommands.updateMpvBounds(rect.x, rect.y, rect.width, rect.height);
-        }
-      } catch (err) {
-        console.error("Failed to start MPV preview:", err);
-        playbackStore.mpv_started = false;
-      }
-    }
-  }
+
+  // ── Transport controls ────────────────────────────────────────────────────
 
   async function handleTogglePlay() {
-    if (!playbackStore.mpv_started) {
-      await handleStart();
-    }
-    if (playbackStore.mpv_started) {
-      try {
-        await tauriCommands.mpvTogglePause();
-        playbackStore.togglePlay();
-      } catch (err) {
-        console.error("MPV communication error:", err);
-        playbackStore.mpv_started = false;
-      }
-    } else {
+    if (!playbackStore.isReady) return;
+    try {
+      await tauriCommands.mpvTogglePause();
       playbackStore.togglePlay();
+    } catch (err) {
+      console.error('MPV toggle pause failed:', err);
+      playbackStore.setMpvState('error');
     }
   }
 
-  async function handleFrame(dir: "forward" | "backward") {
-    if (!playbackStore.mpv_started) {
-      await handleStart();
-    }
-    if (playbackStore.mpv_started) {
-      try {
-        await tauriCommands.mpvFrameStep(dir);
-      } catch (err) {
-        console.error("MPV communication error:", err);
-        playbackStore.mpv_started = false;
-      }
+  async function handleFrame(dir: 'forward' | 'backward') {
+    if (!playbackStore.isReady) return;
+    try {
+      await tauriCommands.mpvFrameStep(dir);
+    } catch (err) {
+      console.error('MPV frame step failed:', err);
+      playbackStore.setMpvState('error');
     }
   }
 </script>
 
 <div class="player-container">
-  <div class="video-placeholder" bind:this={videoContainer}>
-    {#if !playbackStore.mpv_started}
-      <button class="btn-start" onclick={handleStart}>START MPV PREVIEW</button>
-      <p class="mt-2 text-sm">MPV will open in a separate window.</p>
-    {:else}
-      <div class="mpv-active">
-        <h3>MPV is Active</h3>
-        <p>Previewing current timeline.</p>
+  <!-- ── Video viewport ──────────────────────────────────────────────────── -->
+  <div class="video-viewport" bind:this={videoContainer}>
+
+    {#if playbackStore.mpv_state === 'not_started'}
+      <!-- No episode loaded yet -->
+      <div class="placeholder">
+        <div class="placeholder-icon">▶</div>
+        <p>Select an episode to begin preview</p>
       </div>
+
+    {:else if playbackStore.mpv_state === 'starting'}
+      <!-- MPV process is spawning -->
+      <div class="placeholder">
+        <div class="spinner"></div>
+        <p>Starting preview…</p>
+      </div>
+
+    {:else if playbackStore.mpv_state === 'loading'}
+      <!-- MPV visible behind; show subtle loading bar -->
+      <div class="loading-bar-container">
+        <div class="loading-bar"></div>
+      </div>
+
+    {:else if playbackStore.mpv_state === 'error'}
+      <!-- Pipe failure or spawn error -->
+      <div class="placeholder error">
+        <div class="placeholder-icon">⚠</div>
+        <p>Preview failed. Select an episode to retry.</p>
+      </div>
+
+    {:else}
+      <!-- ready / playing / paused: MPV native window is visible. Nothing to overlay. -->
     {/if}
+
   </div>
 
+  <!-- ── Transport controls ─────────────────────────────────────────────── -->
   <div class="controls">
-    <button onclick={() => handleFrame("backward")} disabled={!playbackStore.mpv_started}>⏮ Frame</button>
-    <button class="btn-play" onclick={handleTogglePlay} disabled={!playbackStore.mpv_started}>
-      {playbackStore.is_playing ? 'Pause' : 'Play'}
+    <button
+      onclick={() => handleFrame('backward')}
+      disabled={!playbackStore.isReady}
+      title="Step backward one frame (←)"
+    >⏮ Frame</button>
+
+    <button
+      class="btn-play"
+      onclick={handleTogglePlay}
+      disabled={!playbackStore.isReady}
+      title="Play / Pause (Space)"
+    >
+      {playbackStore.is_playing ? '⏸ Pause' : '▶ Play'}
     </button>
-    <button onclick={() => handleFrame("forward")} disabled={!playbackStore.mpv_started}>Frame ⏭</button>
+
+    <button
+      onclick={() => handleFrame('forward')}
+      disabled={!playbackStore.isReady}
+      title="Step forward one frame (→)"
+    >Frame ⏭</button>
   </div>
 </div>
 
@@ -120,64 +120,121 @@
     flex-direction: column;
     padding: 20px;
     background: var(--bg-darker);
+    gap: 16px;
   }
 
-  .video-placeholder {
+  /* ── Video viewport ───────────────────────────────────────────────────── */
+  .video-viewport {
     flex: 1;
     background: #000;
+    border-radius: 8px;
+    position: relative;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* ── Placeholder (not_started / error) ───────────────────────────────── */
+  .placeholder {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    border-radius: 8px;
-    margin-bottom: 20px;
     color: var(--text-muted);
+    gap: 12px;
   }
 
-  .mt-2 { margin-top: 8px; }
-  .text-sm { font-size: 0.85em; }
-
-  .btn-start {
-    padding: 10px 20px;
-    background: var(--accent-red);
-    color: white;
-    font-weight: bold;
-    border-radius: 4px;
-    cursor: pointer;
+  .placeholder.error {
+    color: var(--accent-red, #ef4444);
   }
 
+  .placeholder-icon {
+    font-size: 2.5rem;
+    opacity: 0.4;
+  }
+
+  .placeholder p {
+    font-size: 0.9rem;
+    text-align: center;
+    max-width: 220px;
+    line-height: 1.5;
+  }
+
+  /* ── Spinner (starting) ──────────────────────────────────────────────── */
+  .spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid rgba(255, 255, 255, 0.15);
+    border-top-color: var(--accent-blue, #3b82f6);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* ── Loading bar (loading state) ─────────────────────────────────────── */
+  .loading-bar-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+  }
+
+  .loading-bar {
+    height: 100%;
+    width: 40%;
+    background: var(--accent-blue, #3b82f6);
+    border-radius: 2px;
+    animation: slide 1.2s ease-in-out infinite;
+  }
+
+  @keyframes slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(350%); }
+  }
+
+  /* ── Transport controls ──────────────────────────────────────────────── */
   .controls {
     display: flex;
     justify-content: center;
-    gap: 15px;
+    gap: 12px;
+    flex-shrink: 0;
   }
 
   .controls button {
-    padding: 8px 16px;
+    padding: 8px 18px;
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
-    border-radius: 4px;
-    transition: background 0.2s;
+    border-radius: 6px;
+    font-size: 0.875rem;
     cursor: pointer;
     color: var(--text-main);
+    transition: background 0.15s, opacity 0.15s;
   }
-  
+
   .controls button:hover:not(:disabled) {
     background: var(--bg-hover);
   }
 
   .controls button:disabled {
-    opacity: 0.5;
+    opacity: 0.35;
     cursor: not-allowed;
   }
 
   .btn-play {
-    background: var(--accent-blue) !important;
-    color: white;
-    font-weight: bold;
-    min-width: 80px;
+    background: var(--accent-blue, #3b82f6) !important;
+    color: #fff;
+    font-weight: 600;
+    min-width: 96px;
   }
+
   .btn-play:hover:not(:disabled) {
-    background: var(--accent-blue-hover) !important;
+    background: var(--accent-blue-hover, #2563eb) !important;
   }
 </style>

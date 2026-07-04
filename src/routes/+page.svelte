@@ -40,16 +40,32 @@
     }
   }
 
+  // ── Debounce utility ──────────────────────────────────────────────────────
+
+  function debounce<T extends (...args: any[]) => any>(fn: T, ms: number): T {
+    let timer: ReturnType<typeof setTimeout>;
+    return ((...args: any[]) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => fn(...args), ms);
+    }) as T;
+  }
+
   // ── MPV entry point (ONLY place that calls mpvLoadFile) ───────────────────
   //
   // Rule:
   //   Timeline scrubbing  → moves playhead_ms ONLY, never calls mpvLoadFile
   //   Episode/Segment click → calls selectEpisodeForPreview → mpvLoadFile once
   //
-  // This prevents the cascade: Ep1 → Ep2 → Ep3 on a single scrub gesture.
+  // Three actions always happen together:
+  //   1. Update selectedEpisodeId / selectedSegmentId
+  //   2. Move playhead to segment.timeline_offset_ms
+  //   3. Load file into MPV at segment.source_start_ms
 
-  async function selectEpisodeForPreview(episodeId: string, segmentId?: string) {
-    const ep   = projectStore.episodes.find(e => e.id === episodeId);
+  async function _selectEpisodeForPreview(episodeId: string, segmentId?: string) {
+    // State gate: ignore new requests while busy (starting/loading)
+    if (playbackStore.isBusy) return;
+
+    const ep = projectStore.episodes.find(e => e.id === episodeId);
     if (!ep) return;
 
     const segs = projectStore.segmentsByEpisode.get(episodeId) ?? [];
@@ -57,17 +73,38 @@
       ? segs.find(s => s.id === segmentId)
       : segs[0];
 
-    // Update selection state
+    // ── Action 1: Update selection ──────────────────────────────────────────
     projectStore.selectedEpisodeId = episodeId;
     projectStore.selectedSegmentId = targetSeg?.id ?? null;
 
-    // Load file into MPV at the segment's source start time
+    // ── Action 2: Move playhead ─────────────────────────────────────────────
     if (targetSeg) {
-      await tauriCommands.mpvLoadFile(ep.path, targetSeg.source_start_ms / 1000);
-    } else {
-      await tauriCommands.mpvLoadFile(ep.path, 0);
+      playbackStore.setPlayhead(targetSeg.timeline_offset_ms);
+    }
+
+    // ── Action 3: Load into MPV ─────────────────────────────────────────────
+    try {
+      // Auto-start MPV on first use
+      if (playbackStore.isIdle) {
+        playbackStore.setMpvState('starting');
+        await tauriCommands.mpvStart();
+      }
+
+      playbackStore.setMpvState('loading');
+      const startSec = targetSeg ? targetSeg.source_start_ms / 1000 : 0;
+      await tauriCommands.mpvLoadFile(ep.path, startSec);
+
+      // Temporary approximation: treat IPC write success as ready.
+      // Future: drive this transition from MPV events (file-loaded / playback-restart).
+      playbackStore.setMpvState('ready');
+    } catch (err) {
+      console.error('MPV error during episode selection:', err);
+      playbackStore.setMpvState('error');
     }
   }
+
+  // 150ms debounce — collapses rapid clicks to the last one
+  const selectEpisodeForPreview = debounce(_selectEpisodeForPreview, 150);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
 
@@ -96,13 +133,16 @@
 
     if (e.key === ' ' && !e.ctrlKey) {
       e.preventDefault();
+      if (!playbackStore.isReady) return; // guard: no command during loading/spawning
       await tauriCommands.mpvTogglePause();
       playbackStore.togglePlay();
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
+      if (!playbackStore.isReady) return;
       await tauriCommands.mpvFrameStep('backward');
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
+      if (!playbackStore.isReady) return;
       await tauriCommands.mpvFrameStep('forward');
     } else if (e.key.toLowerCase() === 'b' && e.ctrlKey) {
       e.preventDefault();
@@ -142,6 +182,18 @@
       });
     }
   }
+
+  // ── Clear project → unload MPV ────────────────────────────────────────────
+  // When all episodes are removed (Clear Project OR last episode deleted),
+  // unload the file from MPV so the preview panel returns to placeholder state.
+
+  $effect(() => {
+    if (projectStore.episodes.length === 0 && playbackStore.isReady) {
+      tauriCommands.mpvUnload()
+        .catch(err => console.error('mpvUnload failed:', err));
+      playbackStore.setMpvState('not_started');
+    }
+  });
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} />

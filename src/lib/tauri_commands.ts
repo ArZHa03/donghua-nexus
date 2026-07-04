@@ -32,5 +32,9 @@ export const tauriCommands = {
 
   updateMpvBounds: (x: number, y: number, width: number, height: number): Promise<void> => {
     return invoke("update_mpv_bounds", { x, y, width, height });
+  },
+
+  mpvUnload: (): Promise<void> => {
+    return invoke("mpv_unload");
   }
 };

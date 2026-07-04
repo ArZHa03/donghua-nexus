@@ -1,6 +1,7 @@
 <script lang="ts">
   import { projectStore } from '../../stores/project_store.svelte';
   import { playbackStore } from '../../stores/playback_store.svelte';
+  import { tauriCommands } from '../../tauri_commands';
 
   interface Props {
     onAddFiles: () => void;
@@ -30,8 +31,12 @@
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
-  function handleClearProject() {
+  async function handleClearProject() {
     if (window.confirm("Clear all episodes and project state? This action cannot be undone.")) {
+      // Unload MPV file before clearing so the preview returns to placeholder.
+      if (playbackStore.isReady) {
+        await tauriCommands.mpvUnload().catch(() => {});
+      }
       projectStore.clear();
       playbackStore.reset();
     }
