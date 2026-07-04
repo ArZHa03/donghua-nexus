@@ -1,6 +1,7 @@
 <script lang="ts">
   import { projectStore } from '../../stores/project_store.svelte';
   import { playbackStore } from '../../stores/playback_store.svelte';
+  import { loadingStore } from '../../stores/loading_store.svelte';
   import type { EpisodeSegment } from '../../types';
 
   // ── Props ─────────────────────────────────────────────────────────────────
@@ -114,8 +115,11 @@
     const targetTickPx = 120;
     const msPerTick_raw = targetTickPx / scale;
     // Round to a human-friendly interval
-    const niceIntervals = [1000, 5000, 10000, 30000, 60000, 300000, 600000];
-    const interval = niceIntervals.find(i => i >= msPerTick_raw) ?? 600000;
+    const niceIntervals = [
+      100, 500, 1000, 5000, 10000, 30000, 60000, 300000, 600000, 
+      1800000, 3600000, 7200000, 14400000, 28800000, 86400000
+    ];
+    const interval = niceIntervals.find(i => i >= msPerTick_raw) ?? 86400000;
 
     const ticks: { ms: number; label: string }[] = [];
     for (let ms = 0; ms <= projectStore.total_duration_ms; ms += interval) {
@@ -168,6 +172,20 @@
     const ms     = Math.max(0, Math.min(clickX / scale, projectStore.total_duration_ms));
     playbackStore.setPlayhead(ms);
     onSelectSegment(seg.episode_id, seg.id);
+  }
+
+  async function handleSetZoomMode(mode: 'fit-entire' | 'fit-episode') {
+    loadingStore.start("Calculating layout...");
+    await new Promise(r => setTimeout(r, 10));
+    playbackStore.setZoomMode(mode);
+    loadingStore.stop();
+  }
+
+  async function handleSetZoomFactor(factor: number) {
+    loadingStore.start("Calculating layout...");
+    await new Promise(r => setTimeout(r, 10));
+    playbackStore.setZoomFactor(factor);
+    loadingStore.stop();
   }
 </script>
 
@@ -240,13 +258,13 @@
 <!-- Zoom Controls -->
 <div class="zoom-controls">
   <button 
-    onclick={() => playbackStore.setZoomMode('fit-entire')} 
+    onclick={() => handleSetZoomMode('fit-entire')} 
     class:active={playbackStore.zoom_mode === 'fit-entire'}
   >
     Fit All
   </button>
   <button 
-    onclick={() => playbackStore.setZoomMode('fit-episode')} 
+    onclick={() => handleSetZoomMode('fit-episode')} 
     class:active={playbackStore.zoom_mode === 'fit-episode'}
     disabled={!projectStore.selectedEpisodeId}
   >
@@ -254,7 +272,7 @@
   </button>
   {#each [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0] as preset}
     <button 
-      onclick={() => playbackStore.setZoomFactor(preset)} 
+      onclick={() => handleSetZoomFactor(preset)} 
       class:active={playbackStore.zoom_mode === 'manual' && playbackStore.zoom_factor === preset}
     >
       {preset * 100}%

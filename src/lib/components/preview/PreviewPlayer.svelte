@@ -1,10 +1,36 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
   import { tauriCommands } from '../../tauri_commands';
   import { playbackStore } from '../../stores/playback_store.svelte';
   import { projectStore } from '../../stores/project_store.svelte';
 
   // Note: True sync from MPV back to Svelte would require Tauri Events.
   // For M1, we click to play/pause in Svelte and send commands to MPV.
+  
+  let videoContainer: HTMLDivElement | undefined = $state();
+  let resizeObserver: ResizeObserver | undefined;
+
+  onMount(() => {
+    resizeObserver = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        if (entry.target === videoContainer && playbackStore.mpv_started) {
+          const rect = videoContainer.getBoundingClientRect();
+          tauriCommands.updateMpvBounds(rect.x, rect.y, rect.width, rect.height)
+            .catch(err => console.error("Failed to update MPV bounds:", err));
+        }
+      }
+    });
+
+    if (videoContainer) {
+      resizeObserver.observe(videoContainer);
+    }
+  });
+
+  onDestroy(() => {
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+    }
+  });
   
   async function handleStart() {
     if (!playbackStore.mpv_started) {
@@ -19,6 +45,12 @@
           const targetSeg = projectStore.selectedSegment || segs[0];
           const startMs = targetSeg ? targetSeg.source_start_ms : 0;
           await tauriCommands.mpvLoadFile(activeEp.path, startMs / 1000);
+        }
+        
+        // Initial bounds sync
+        if (videoContainer) {
+          const rect = videoContainer.getBoundingClientRect();
+          await tauriCommands.updateMpvBounds(rect.x, rect.y, rect.width, rect.height);
         }
       } catch (err) {
         console.error("Failed to start MPV preview:", err);
@@ -60,7 +92,7 @@
 </script>
 
 <div class="player-container">
-  <div class="video-placeholder">
+  <div class="video-placeholder" bind:this={videoContainer}>
     {#if !playbackStore.mpv_started}
       <button class="btn-start" onclick={handleStart}>START MPV PREVIEW</button>
       <p class="mt-2 text-sm">MPV will open in a separate window.</p>

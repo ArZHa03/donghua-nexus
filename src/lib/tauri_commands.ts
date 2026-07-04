@@ -28,5 +28,9 @@ export const tauriCommands = {
   
   mpvFrameStep: (direction: "forward" | "backward"): Promise<void> => {
     return invoke("mpv_frame_step", { direction });
+  },
+
+  updateMpvBounds: (x: number, y: number, width: number, height: number): Promise<void> => {
+    return invoke("update_mpv_bounds", { x, y, width, height });
   }
 };

@@ -14,7 +14,7 @@ pub async fn mpv_start(state: State<'_, MpvState>) -> Result<(), String> {
 
     if let Some(client) = client_opt.as_ref() {
         // Check if the named pipe client is still writable and connected
-        if client.pipe.ready(tokio::io::Interest::WRITABLE).await.is_ok() {
+        if client.can_write().await {
             is_broken = false;
         }
     }

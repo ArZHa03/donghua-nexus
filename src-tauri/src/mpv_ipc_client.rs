@@ -6,19 +6,24 @@ use crate::third_party_paths::MPV_PATH;
 
 pub struct MpvIpcClient {
     pipe: NamedPipeClient,
+    pub pid: Option<u32>,
+    pub hwnd: Option<isize>,
 }
 
 impl MpvIpcClient {
+    pub async fn can_write(&self) -> bool {
+        self.pipe.ready(tokio::io::Interest::WRITABLE).await.is_ok()
+    }
+
     pub async fn start_and_connect() -> Result<Self, String> {
         let pipe_name = r"\\.\pipe\donghua-nexus-mpv";
         
         // Try connecting to named pipe first to see if an instance is already running
         if let Ok(client) = ClientOptions::new().open(pipe_name) {
-            return Ok(Self { pipe: client });
+            return Ok(Self { pipe: client, pid: None, hwnd: None });
         }
 
-        // Spawn MPV if not already running
-        Command::new(MPV_PATH)
+        let child = Command::new(MPV_PATH)
             .args([
                 "--idle",
                 "--no-terminal",
@@ -34,12 +39,14 @@ impl MpvIpcClient {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("Failed to spawn MPV: {}", e))?;
+            
+        let pid = child.id();
 
         // Try connecting to named pipe
         for _ in 0..10 {
             sleep(Duration::from_millis(200)).await;
             if let Ok(client) = ClientOptions::new().open(pipe_name) {
-                return Ok(Self { pipe: client });
+                return Ok(Self { pipe: client, pid: Some(pid), hwnd: None });
             }
         }
 

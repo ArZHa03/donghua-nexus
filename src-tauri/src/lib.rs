@@ -25,6 +25,7 @@ pub fn run() {
             commands::mpv_control::mpv_seek,
             commands::mpv_control::mpv_toggle_pause,
             commands::mpv_control::mpv_frame_step,
+            commands::mpv_embed::update_mpv_bounds,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
