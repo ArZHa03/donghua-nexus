@@ -1,103 +1,170 @@
 import type { VideoMetadata, EpisodeSegment } from "../domain";
-import { HistoryService } from "../services/history_service";
-import { SegmentService, type SegmentEditResult } from "../services/segment_service";
 import { EpisodeService, type RemoveEpisodeResult } from "../services/episode_service";
+import { episodeStore } from "./episode_store.svelte";
+import { segmentStore } from "./segment_store.svelte";
+import { historyStore } from "./history_store.svelte";
+import { processingStore } from "./processing_store.svelte";
+import { subtitleStore } from "./subtitle_store.svelte";
 
 class ProjectStore {
-  episodes  = $state<VideoMetadata[]>([]);
-  segments  = $state<EpisodeSegment[]>([]);
+  // ── Child store references ────────────────────────────────────────────────
+
+  episodeStore = episodeStore;
+  segmentStore = segmentStore;
+  historyStore = historyStore;
+  processingStore = processingStore;
+  subtitleStore = subtitleStore;
+
+  // ── Backward-compatible state accessors (delegate to child stores) ────────
+
   project_title = $state("Untitled Project");
 
-  importing       = $state(false);
-  importProgress  = $state(0);
-  importTotal     = $state(0);
+  get episodes() { return this.episodeStore.episodes; }
+  set episodes(v) { this.episodeStore.episodes = v; }
 
-  isProcessing    = $state(false);
-  processingLabel = $state("");
-  processingDetails = $state<{ episodeIdx?: number; segmentIdx?: number } | null>(null);
+  get segments() { return this.segmentStore.segments; }
+  set segments(v) { this.segmentStore.segments = v; }
 
-  selectedEpisodeId = $state<string | null>(null);
-  selectedSegmentId = $state<string | null>(null);
-  selectedSubtitleTracks = $state<Record<string, number | null>>({});
+  get importing() { return this.processingStore.importing; }
+  set importing(v) { this.processingStore.importing = v; }
 
-  private historyService = new HistoryService();
-  private segmentService = new SegmentService();
-  private episodeService = new EpisodeService();
+  get importProgress() { return this.processingStore.importProgress; }
+  set importProgress(v) { this.processingStore.importProgress = v; }
 
-  // ── Derived views ─────────────────────────────────────────────────────────
+  get importTotal() { return this.processingStore.importTotal; }
+  set importTotal(v) { this.processingStore.importTotal = v; }
+
+  get isProcessing() { return this.processingStore.isProcessing; }
+  set isProcessing(v) { this.processingStore.isProcessing = v; }
+
+  get processingLabel() { return this.processingStore.processingLabel; }
+  set processingLabel(v) { this.processingStore.processingLabel = v; }
+
+  get processingDetails() { return this.processingStore.processingDetails; }
+  set processingDetails(v) { this.processingStore.processingDetails = v; }
+
+  get selectedEpisodeId() { return this.episodeStore.selectedEpisodeId; }
+  set selectedEpisodeId(v) { this.episodeStore.selectedEpisodeId = v; }
+
+  get selectedSegmentId() { return this.segmentStore.selectedSegmentId; }
+  set selectedSegmentId(v) { this.segmentStore.selectedSegmentId = v; }
+
+  get selectedSubtitleTracks() { return this.subtitleStore.selectedSubtitleTracks; }
+  set selectedSubtitleTracks(v) { this.subtitleStore.selectedSubtitleTracks = v; }
+
+  // ── Backward-compatible derived getters ───────────────────────────────────
 
   get selectedEpisode(): VideoMetadata | null {
-    return this.episodes.find(e => e.id === this.selectedEpisodeId) ?? null;
+    return this.episodeStore.selectedEpisode;
   }
 
   get selectedSegment(): EpisodeSegment | null {
-    return this.segments.find(s => s.id === this.selectedSegmentId) ?? null;
+    return this.segmentStore.selectedSegment;
   }
 
   get activeSegments(): EpisodeSegment[] {
-    return this.segments.filter(s => !s.deleted);
+    return this.segmentStore.activeSegments;
   }
 
   get segmentsByEpisode(): Map<string, EpisodeSegment[]> {
-    const map = new Map<string, EpisodeSegment[]>();
-    for (const seg of this.segments) {
-      if (!seg.deleted) {
-        const arr = map.get(seg.episode_id) ?? [];
-        arr.push(seg);
-        map.set(seg.episode_id, arr);
-      }
-    }
-    return map;
+    return this.segmentStore.segmentsByEpisode;
   }
 
   get total_duration_ms(): number {
-    return this.activeSegments.reduce(
-      (sum, s) => sum + (s.source_end_ms - s.source_start_ms), 0
-    );
+    return this.segmentStore.total_duration_ms;
   }
 
   get total_file_size_bytes(): number {
-    return this.episodes.reduce((sum, e) => sum + e.file_size_bytes, 0);
+    return this.episodeStore.total_file_size_bytes;
+  }
+
+  // ── Episode management ────────────────────────────────────────────────────
+
+  private episodeService: EpisodeService = new EpisodeService();
+
+  addEpisodes(files: VideoMetadata[]) {
+    const result = this.episodeService.addEpisodes(
+      this.episodeStore.episodes, this.segmentStore.segments,
+      files, this.episodeStore.selectedEpisodeId,
+    );
+    this.episodeStore.episodes = result.episodes;
+    this.segmentStore.segments = result.segments;
+    this.episodeStore.selectedEpisodeId = result.newSelectedEpisodeId;
+    this.segmentStore.selectedSegmentId = result.newSelectedSegmentId;
+    this.segmentStore.recalculateOffsets();
+  }
+
+  async removeEpisode(episodeId: string) {
+    if (!this.episodeStore.episodes.some(e => e.id === episodeId)) return;
+
+    this.processingStore.processingLabel = "Removing Episode...";
+    this.processingStore.isProcessing = true;
+    this.processingStore.processingDetails = null;
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    try {
+      this.saveSnapshot();
+      const result = this.episodeService.removeEpisode(
+        this.episodeStore.episodes, this.segmentStore.segments,
+        episodeId,
+        this.episodeStore.selectedEpisodeId, this.segmentStore.selectedSegmentId,
+        this.subtitleStore.selectedSubtitleTracks,
+      );
+      this.applyRemoveResult(result);
+    } finally {
+      this.processingStore.isProcessing = false;
+      this.processingStore.processingLabel = "";
+      this.processingStore.processingDetails = null;
+    }
+  }
+
+  private applyRemoveResult(result: RemoveEpisodeResult) {
+    this.episodeStore.episodes = result.episodes;
+    this.segmentStore.segments = result.segments;
+    this.subtitleStore.selectedSubtitleTracks = result.selectedSubtitleTracks;
+    this.episodeStore.selectedEpisodeId = result.newSelectedEpisodeId;
+    this.segmentStore.selectedSegmentId = result.newSelectedSegmentId;
+    this.segmentStore.recalculateOffsets();
   }
 
   // ── Undo / Redo ───────────────────────────────────────────────────────────
 
   saveSnapshot() {
-    this.historyService.saveFullSnapshot(
-      this.episodes, this.segments,
-      this.selectedEpisodeId, this.selectedSegmentId,
-      this.selectedSubtitleTracks,
+    this.historyStore.saveFullSnapshot(
+      this.episodeStore.episodes, this.segmentStore.segments,
+      this.episodeStore.selectedEpisodeId, this.segmentStore.selectedSegmentId,
+      this.subtitleStore.selectedSubtitleTracks,
     );
   }
 
-  undo() { this.historyService.undoFull(); }
-  redo() { this.historyService.redoFull(); }
+  undo() { this.historyStore.undoFull(); }
+  redo() { this.historyStore.redoFull(); }
 
   smartUndo() {
-    if (this.historyService.canUndoSegment()) {
-      const prev = this.historyService.undoSegment();
+    if (this.historyStore.canUndoSegment()) {
+      const prev = this.historyStore.undoSegment();
       if (prev) {
-        this.historyService.pushCurrentToSegFuture(this.segments);
-        this.segments = prev;
-        this.recalculateOffsets();
+        this.historyStore.pushCurrentToSegFuture(this.segmentStore.segments);
+        this.segmentStore.segments = prev;
+        this.segmentStore.recalculateOffsets();
         return;
       }
     }
-    const snapshot = this.historyService.undoFull();
+    const snapshot = this.historyStore.undoFull();
     if (snapshot) this.restoreSnapshot(snapshot);
   }
 
   smartRedo() {
-    if (this.historyService.canRedoSegment()) {
-      const next = this.historyService.redoSegment();
+    if (this.historyStore.canRedoSegment()) {
+      const next = this.historyStore.redoSegment();
       if (next) {
-        this.historyService.pushCurrentToSegStack(this.segments);
-        this.segments = next;
-        this.recalculateOffsets();
+        this.historyStore.pushCurrentToSegStack(this.segmentStore.segments);
+        this.segmentStore.segments = next;
+        this.segmentStore.recalculateOffsets();
         return;
       }
     }
-    const snapshot = this.historyService.redoFull();
+    const snapshot = this.historyStore.redoFull();
     if (snapshot) this.restoreSnapshot(snapshot);
   }
 
@@ -108,149 +175,85 @@ class ProjectStore {
     selectedSegmentId: string | null;
     selectedSubtitleTracks: Record<string, number | null>;
   }) {
-    this.episodes = snapshot.episodes;
-    this.segments = snapshot.segments;
-    this.selectedEpisodeId = snapshot.selectedEpisodeId;
-    this.selectedSegmentId = snapshot.selectedSegmentId;
-    this.selectedSubtitleTracks = snapshot.selectedSubtitleTracks;
-    this.recalculateOffsets();
+    this.episodeStore.episodes = snapshot.episodes;
+    this.segmentStore.segments = snapshot.segments;
+    this.episodeStore.selectedEpisodeId = snapshot.selectedEpisodeId;
+    this.segmentStore.selectedSegmentId = snapshot.selectedSegmentId;
+    this.subtitleStore.selectedSubtitleTracks = snapshot.selectedSubtitleTracks;
+    this.segmentStore.recalculateOffsets();
   }
 
   // ── Segment editing ───────────────────────────────────────────────────────
 
-  private applySegmentEdit(result: SegmentEditResult) {
-    if (result.clearedSelectionId && this.selectedSegmentId === result.clearedSelectionId) {
-      this.selectedSegmentId = null;
-    }
-    this.segments = result.segments;
-    this.recalculateOffsetsFrom(result.recalcFrom);
-  }
-
   splitSegment(global_ms: number) {
-    const result = this.segmentService.splitSegment(
-      this.segments, global_ms,
-      () => this.historyService.saveSegmentSnapshot(this.segments),
+    const result = this.segmentStore.splitSegment(
+      global_ms,
+      () => this.historyStore.saveSegmentSnapshot(this.segmentStore.segments),
     );
-    if (result) this.applySegmentEdit(result);
+    if (result) this.segmentStore.applySegmentEdit(result);
   }
 
   deleteLeft(global_ms: number) {
-    const result = this.segmentService.deleteLeft(
-      this.segments, global_ms, this.selectedSegmentId,
-      () => this.historyService.saveSegmentSnapshot(this.segments),
+    const result = this.segmentStore.deleteLeft(
+      global_ms,
+      () => this.historyStore.saveSegmentSnapshot(this.segmentStore.segments),
     );
-    if (result) this.applySegmentEdit(result);
+    if (result) this.segmentStore.applySegmentEdit(result);
   }
 
   deleteRight(global_ms: number) {
-    const result = this.segmentService.deleteRight(
-      this.segments, global_ms, this.selectedSegmentId,
-      () => this.historyService.saveSegmentSnapshot(this.segments),
+    const result = this.segmentStore.deleteRight(
+      global_ms,
+      () => this.historyStore.saveSegmentSnapshot(this.segmentStore.segments),
     );
-    if (result) this.applySegmentEdit(result);
+    if (result) this.segmentStore.applySegmentEdit(result);
   }
 
   softDeleteSegment(segmentId: string) {
-    const result = this.segmentService.softDeleteSegment(
-      this.segments, segmentId, this.selectedSegmentId,
-      () => this.historyService.saveSegmentSnapshot(this.segments),
+    const result = this.segmentStore.softDeleteSegment(
+      segmentId,
+      () => this.historyStore.saveSegmentSnapshot(this.segmentStore.segments),
     );
-    if (result) this.applySegmentEdit(result);
+    if (result) this.segmentStore.applySegmentEdit(result);
   }
 
   setDetailsForSegment(seg: EpisodeSegment) {
-    const epIdx = this.episodes.findIndex(e => e.id === seg.episode_id) + 1;
-    const epSegs = this.segments.filter(s => s.episode_id === seg.episode_id && !s.deleted);
+    const epIdx = this.episodeStore.episodes.findIndex(e => e.id === seg.episode_id) + 1;
+    const epSegs = this.segmentStore.segments.filter(s => s.episode_id === seg.episode_id && !s.deleted);
     const segIdx = epSegs.findIndex(s => s.id === seg.id) + 1;
-    this.processingDetails = { episodeIdx: epIdx, segmentIdx: segIdx };
-    this.historyService.saveSegmentSnapshot(this.segments);
-  }
-
-  // ── Episode management ────────────────────────────────────────────────────
-
-  addEpisodes(files: VideoMetadata[]) {
-    const result = this.episodeService.addEpisodes(
-      this.episodes, this.segments, files, this.selectedEpisodeId,
-    );
-    this.episodes = result.episodes;
-    this.segments = result.segments;
-    this.selectedEpisodeId = result.newSelectedEpisodeId;
-    this.selectedSegmentId = result.newSelectedSegmentId;
-    this.recalculateOffsets();
-  }
-
-  async removeEpisode(episodeId: string) {
-    if (!this.episodes.some(e => e.id === episodeId)) return;
-
-    this.processingLabel = "Removing Episode...";
-    this.isProcessing = true;
-    this.processingDetails = null;
-    await new Promise(resolve => setTimeout(resolve, 30));
-
-    try {
-      this.saveSnapshot();
-      const result = this.episodeService.removeEpisode(
-        this.episodes, this.segments, episodeId,
-        this.selectedEpisodeId, this.selectedSegmentId,
-        this.selectedSubtitleTracks,
-      );
-      this.applyRemoveResult(result);
-    } finally {
-      this.isProcessing = false;
-      this.processingLabel = "";
-      this.processingDetails = null;
-    }
-  }
-
-  private applyRemoveResult(result: RemoveEpisodeResult) {
-    this.episodes = result.episodes;
-    this.segments = result.segments;
-    this.selectedSubtitleTracks = result.selectedSubtitleTracks;
-    this.selectedEpisodeId = result.newSelectedEpisodeId;
-    this.selectedSegmentId = result.newSelectedSegmentId;
-    this.recalculateOffsets();
+    this.processingStore.processingDetails = { episodeIdx: epIdx, segmentIdx: segIdx };
+    this.historyStore.saveSegmentSnapshot(this.segmentStore.segments);
   }
 
   // ── Subtitle tracks ──────────────────────────────────────────────────────
 
   setEpisodeSubtitleTrack(episodeId: string, trackIndex: number | null) {
-    this.selectedSubtitleTracks[episodeId] = trackIndex;
+    this.subtitleStore.setEpisodeSubtitleTrack(episodeId, trackIndex);
   }
 
   getEpisodeSubtitleTrack(episodeId: string): number | null {
-    if (this.selectedSubtitleTracks[episodeId] === undefined) {
-      const ep = this.episodes.find(e => e.id === episodeId);
-      return (ep && ep.subtitle_tracks.length > 0) ? 0 : null;
-    }
-    return this.selectedSubtitleTracks[episodeId];
+    return this.subtitleStore.getEpisodeSubtitleTrack(episodeId, this.episodeStore.episodes);
   }
 
   // ── Offsets ───────────────────────────────────────────────────────────────
 
   recalculateOffsetsFrom(startIndex: number) {
-    this.segments = this.segmentService.recalculateOffsetsFrom(this.segments, startIndex);
+    this.segmentStore.recalculateOffsetsFrom(startIndex);
   }
 
   recalculateOffsets() {
-    this.recalculateOffsetsFrom(0);
+    this.segmentStore.recalculateOffsets();
   }
 
   // ── Reset ─────────────────────────────────────────────────────────────────
 
   clear() {
-    this.episodes         = [];
-    this.segments         = [];
-    this.importing        = false;
-    this.importProgress   = 0;
-    this.importTotal      = 0;
-    this.isProcessing     = false;
-    this.processingLabel  = "";
-    this.processingDetails = null;
-    this.project_title    = "Untitled Project";
-    this.selectedEpisodeId = null;
-    this.selectedSegmentId = null;
-    this.selectedSubtitleTracks = {};
-    this.historyService.clear();
+    this.episodeStore.clear();
+    this.segmentStore.clear();
+    this.historyStore.clear();
+    this.processingStore.clear();
+    this.subtitleStore.clear();
+    this.project_title = "Untitled Project";
   }
 }
 
