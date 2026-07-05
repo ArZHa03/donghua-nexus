@@ -6,16 +6,18 @@ pub mod ffprobe_runner;
 pub mod mpv_ipc_client;
 pub mod commands;
 
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(commands::mpv_control::MpvState {
-            client: Arc::new(Mutex::new(None)),
+        .manage(commands::mpv_control::MpvState::new())
+        .setup(|app| {
+            let state = app.state::<commands::mpv_control::MpvState>();
+            state.set_app_handle(app.handle().clone());
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::video_import::import_videos,

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { listen } from '@tauri-apps/api/event';
   import { projectStore } from '../lib/stores/project_store.svelte';
   import DropZone from '../lib/components/import/DropZone.svelte';
   import EpisodeList from '../lib/components/import/EpisodeList.svelte';
@@ -94,9 +96,8 @@
       const startSec = targetSeg ? targetSeg.source_start_ms / 1000 : 0;
       await tauriCommands.mpvLoadFile(ep.path, startSec);
 
-      // Temporary approximation: treat IPC write success as ready.
-      // Future: drive this transition from MPV events (file-loaded / playback-restart).
-      playbackStore.setMpvState('ready');
+      // The loading → ready transition is now driven by MPV's `file-loaded`
+      // event received through the realtime event listener.
     } catch (err) {
       console.error('MPV error during episode selection:', err);
       playbackStore.setMpvState('error');
@@ -182,6 +183,19 @@
       });
     }
   }
+
+  // ── Realtime MPV event listener ───────────────────────────────────────────
+  // Receives events from the backend's event-listener task (Connection #2)
+  // and routes them to the playback store for state transitions and playhead
+  // syncing.
+
+  onMount(() => {
+    let unlisten: (() => void) | null = null;
+    listen<Record<string, unknown>>('mpv-event', (event) => {
+      playbackStore.handleMpvEvent(event.payload);
+    }).then(fn => { unlisten = fn; });
+    return () => unlisten?.();
+  });
 
   // ── Clear project → unload MPV ────────────────────────────────────────────
   // When all episodes are removed (Clear Project OR last episode deleted),
