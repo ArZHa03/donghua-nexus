@@ -48,35 +48,33 @@
   });
 
   async function processFiles(paths: string[]) {
-    // Filter by extension: mkv, mp4
+    if (projectStore.importing) return;
+
     const validExtensions = ['.mkv', '.mp4'];
     const supportedPaths = paths.filter(p => 
       validExtensions.some(ext => p.toLowerCase().endsWith(ext))
     );
     
-    console.log("supported files count:", supportedPaths.length);
-
-    // Filter duplicates by path before calling rust
     const newPaths = supportedPaths.filter(p => !projectStore.episodes.some(e => e.path === p));
-    
-    console.log("accepted file count (new):", newPaths.length);
-    console.log("current total episodes:", projectStore.episodes.length);
-    
     if (newPaths.length === 0) return;
 
     projectStore.importing = true;
     projectStore.importProgress = 0;
     projectStore.importTotal = newPaths.length;
 
-    for (let i = 0; i < newPaths.length; i++) {
-        const metadataList = await tauriCommands.importVideos([newPaths[i]]);
-        if (metadataList && metadataList.length > 0) {
-            projectStore.addEpisodes(metadataList);
-        }
-        projectStore.importProgress = i + 1;
+    try {
+      for (let i = 0; i < newPaths.length; i++) {
+          const metadataList = await tauriCommands.importVideos([newPaths[i]]);
+          if (metadataList && metadataList.length > 0) {
+              projectStore.addEpisodes(metadataList);
+          }
+          projectStore.importProgress = i + 1;
+      }
+    } catch (e) {
+      console.error("Import failed:", e);
+    } finally {
+      projectStore.importing = false;
     }
-    
-    projectStore.importing = false;
   }
 
   async function handleSelectFiles() {

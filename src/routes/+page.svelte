@@ -1,121 +1,74 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
+  import { open } from '@tauri-apps/plugin-dialog';
   import { projectStore } from '../lib/stores/project_store.svelte';
+  import { playbackStore } from '../lib/stores/playback_store.svelte';
+  import { tauriCommands } from '../lib/tauri_commands';
+  import { PlaybackService } from '../lib/services/playback_service';
   import DropZone from '../lib/components/import/DropZone.svelte';
   import EpisodeList from '../lib/components/import/EpisodeList.svelte';
   import PreviewPlayer from '../lib/components/preview/PreviewPlayer.svelte';
   import Timeline from '../lib/components/timeline/Timeline.svelte';
-  import { playbackStore } from '../lib/stores/playback_store.svelte';
-  import { open } from '@tauri-apps/plugin-dialog';
-  import { tauriCommands } from '../lib/tauri_commands';
 
   let selectedPanel = $state('subtitle');
+
+  const playbackService = new PlaybackService(
+    projectStore,
+    playbackStore,
+    tauriCommands,
+  );
 
   // ── Import handlers ───────────────────────────────────────────────────────
 
   async function handleAddFiles() {
+    if (projectStore.importing) return;
+
     const selected = await open({
       multiple: true,
       filters: [{ name: 'Video', extensions: ['mkv', 'mp4'] }]
     });
-    if (Array.isArray(selected) && selected.length > 0) {
-      projectStore.importing = true;
-      projectStore.importProgress = 0;
-      projectStore.importTotal = selected.length;
+    if (!Array.isArray(selected) || selected.length === 0) return;
+
+    projectStore.importing = true;
+    projectStore.importProgress = 0;
+    projectStore.importTotal = selected.length;
+    try {
       for (let i = 0; i < selected.length; i++) {
         const metadata = await tauriCommands.importVideos([selected[i]]);
         projectStore.addEpisodes(metadata);
         projectStore.importProgress = i + 1;
       }
+    } catch (e) {
+      console.error("Import failed:", e);
+    } finally {
       projectStore.importing = false;
     }
   }
 
   async function handleAddFolder() {
+    if (projectStore.importing) return;
+
     const selected = await open({ directory: true });
-    if (selected && typeof selected === 'string') {
-      projectStore.importing = true;
+    if (!selected || typeof selected !== 'string') return;
+
+    projectStore.importing = true;
+    try {
       const metadata = await tauriCommands.importFolder(selected);
       projectStore.addEpisodes(metadata);
+    } catch (e) {
+      console.error("Folder import failed:", e);
+    } finally {
       projectStore.importing = false;
     }
   }
-
-  // ── Debounce utility ──────────────────────────────────────────────────────
-
-  function debounce<T extends (...args: any[]) => any>(fn: T, ms: number): T {
-    let timer: ReturnType<typeof setTimeout>;
-    return ((...args: any[]) => {
-      clearTimeout(timer);
-      timer = setTimeout(() => fn(...args), ms);
-    }) as T;
-  }
-
-  // ── MPV entry point (ONLY place that calls mpvLoadFile) ───────────────────
-  //
-  // Rule:
-  //   Timeline scrubbing  → moves playhead_ms ONLY, never calls mpvLoadFile
-  //   Episode/Segment click → calls selectEpisodeForPreview → mpvLoadFile once
-  //
-  // Three actions always happen together:
-  //   1. Update selectedEpisodeId / selectedSegmentId
-  //   2. Move playhead to segment.timeline_offset_ms
-  //   3. Load file into MPV at segment.source_start_ms
-
-  async function _selectEpisodeForPreview(episodeId: string, segmentId?: string) {
-    // State gate: ignore new requests while busy (starting/loading)
-    if (playbackStore.isBusy) return;
-
-    const ep = projectStore.episodes.find(e => e.id === episodeId);
-    if (!ep) return;
-
-    const segs = projectStore.segmentsByEpisode.get(episodeId) ?? [];
-    const targetSeg = segmentId
-      ? segs.find(s => s.id === segmentId)
-      : segs[0];
-
-    // ── Action 1: Update selection ──────────────────────────────────────────
-    projectStore.selectedEpisodeId = episodeId;
-    projectStore.selectedSegmentId = targetSeg?.id ?? null;
-
-    // ── Action 2: Move playhead ─────────────────────────────────────────────
-    if (targetSeg) {
-      playbackStore.setPlayhead(targetSeg.timeline_offset_ms);
-    }
-
-    // ── Action 3: Load into MPV ─────────────────────────────────────────────
-    try {
-      // Auto-start MPV on first use
-      if (playbackStore.isIdle) {
-        playbackStore.setMpvState('starting');
-        await tauriCommands.mpvStart();
-      }
-
-      playbackStore.setMpvState('loading');
-      const startSec = targetSeg ? targetSeg.source_start_ms / 1000 : 0;
-      await tauriCommands.mpvLoadFile(ep.path, startSec);
-
-      // The loading → ready transition is now driven by MPV's `file-loaded`
-      // event received through the realtime event listener.
-    } catch (err) {
-      console.error('MPV error during episode selection:', err);
-      playbackStore.setMpvState('error');
-    }
-  }
-
-  // 150ms debounce — collapses rapid clicks to the last one
-  const selectEpisodeForPreview = debounce(_selectEpisodeForPreview, 150);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
 
   async function runHeavyAction(label: string, action: () => void) {
     projectStore.processingLabel = label;
     projectStore.isProcessing = true;
-    
-    // Give Svelte a tick/frame to update DOM and paint the overlay before synchronous heavy computation blocks the thread
     await new Promise(resolve => setTimeout(resolve, 30));
-    
     try {
       action();
     } finally {
@@ -132,80 +85,76 @@
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (projectStore.episodes.length === 0) return;
 
-    if (e.key === ' ' && !e.ctrlKey) {
-      e.preventDefault();
-      if (!playbackStore.isReady) return; // guard: no command during loading/spawning
-      await tauriCommands.mpvTogglePause();
-      playbackStore.togglePlay();
-    } else if (e.key === 'ArrowLeft') {
-      e.preventDefault();
-      if (!playbackStore.isReady) return;
-      await tauriCommands.mpvFrameStep('backward');
-    } else if (e.key === 'ArrowRight') {
-      e.preventDefault();
-      if (!playbackStore.isReady) return;
-      await tauriCommands.mpvFrameStep('forward');
-    } else if (e.key.toLowerCase() === 'b' && e.ctrlKey) {
-      e.preventDefault();
-      runHeavyAction('Splitting Segment...', () => {
-        projectStore.splitSegment(playbackStore.playhead_ms);
-      });
-    } else if (e.key.toLowerCase() === 'q' && !e.ctrlKey) {
-      e.preventDefault();
-      runHeavyAction('Trimming Left...', () => {
-        projectStore.deleteLeft(playbackStore.playhead_ms);
-      });
-    } else if (e.key.toLowerCase() === 'w' && !e.ctrlKey) {
-      e.preventDefault();
-      runHeavyAction('Trimming Right...', () => {
-        projectStore.deleteRight(playbackStore.playhead_ms);
-      });
-    } else if (e.key === 'Delete') {
-      e.preventDefault();
-      runHeavyAction('Deleting Segment...', () => {
-        const targetSeg = projectStore.activeSegments.find(s =>
-          playbackStore.playhead_ms >= s.timeline_offset_ms &&
-          playbackStore.playhead_ms < s.timeline_offset_ms + (s.source_end_ms - s.source_start_ms)
-        );
-        if (targetSeg) {
-          projectStore.softDeleteSegment(targetSeg.id);
-        }
-      });
-    } else if (e.key.toLowerCase() === 'z' && e.ctrlKey) {
-      e.preventDefault();
-      runHeavyAction('Undoing...', () => {
-        projectStore.undo();
-      });
-    } else if (e.key.toLowerCase() === 'y' && e.ctrlKey) {
-      e.preventDefault();
-      runHeavyAction('Redoing...', () => {
-        projectStore.redo();
-      });
+    switch (true) {
+      case e.key === ' ' && !e.ctrlKey:
+        e.preventDefault();
+        await playbackService.togglePause();
+        break;
+      case e.key === 'ArrowLeft':
+        e.preventDefault();
+        await playbackService.stepFrame('backward');
+        break;
+      case e.key === 'ArrowRight':
+        e.preventDefault();
+        await playbackService.stepFrame('forward');
+        break;
+      case e.key.toLowerCase() === 'b' && e.ctrlKey:
+        e.preventDefault();
+        runHeavyAction('Splitting Segment...', () => {
+          projectStore.splitSegment(playbackStore.playhead_ms);
+        });
+        break;
+      case e.key.toLowerCase() === 'q' && !e.ctrlKey:
+        e.preventDefault();
+        runHeavyAction('Trimming Left...', () => {
+          projectStore.deleteLeft(playbackStore.playhead_ms);
+        });
+        break;
+      case e.key.toLowerCase() === 'w' && !e.ctrlKey:
+        e.preventDefault();
+        runHeavyAction('Trimming Right...', () => {
+          projectStore.deleteRight(playbackStore.playhead_ms);
+        });
+        break;
+      case e.key === 'Delete':
+        e.preventDefault();
+        runHeavyAction('Deleting Segment...', () => {
+          const targetSeg = projectStore.activeSegments.find(s =>
+            playbackStore.playhead_ms >= s.timeline_offset_ms &&
+            playbackStore.playhead_ms < s.timeline_offset_ms + (s.source_end_ms - s.source_start_ms)
+          );
+          if (targetSeg) projectStore.softDeleteSegment(targetSeg.id);
+        });
+        break;
+      case e.key.toLowerCase() === 'z' && e.ctrlKey:
+        e.preventDefault();
+        runHeavyAction('Undoing...', () => projectStore.smartUndo());
+        break;
+      case e.key.toLowerCase() === 'y' && e.ctrlKey:
+        e.preventDefault();
+        runHeavyAction('Redoing...', () => projectStore.smartRedo());
+        break;
     }
   }
 
   // ── Realtime MPV event listener ───────────────────────────────────────────
-  // Receives events from the backend's event-listener task (Connection #2)
-  // and routes them to the playback store for state transitions and playhead
-  // syncing.
 
   onMount(() => {
     let unlisten: (() => void) | null = null;
     listen<Record<string, unknown>>('mpv-event', (event) => {
       playbackStore.handleMpvEvent(event.payload);
     }).then(fn => { unlisten = fn; });
-    return () => unlisten?.();
+    return () => {
+      playbackService.cancelDebounce();
+      unlisten?.();
+    };
   });
 
-  // ── Clear project → unload MPV ────────────────────────────────────────────
-  // When all episodes are removed (Clear Project OR last episode deleted),
-  // unload the file from MPV so the preview panel returns to placeholder state.
+  // ── Unload MPV when all episodes are removed ──────────────────────────────
 
   $effect(() => {
-    if (projectStore.episodes.length === 0 && playbackStore.isReady) {
-      tauriCommands.mpvUnload()
-        .catch(err => console.error('mpvUnload failed:', err));
-      playbackStore.setMpvState('not_started');
+    if (projectStore.episodes.length === 0) {
+      playbackService.unloadIfEmpty(0);
     }
   });
 </script>
@@ -255,7 +204,7 @@
       <EpisodeList
         onAddFiles={handleAddFiles}
         onAddFolder={handleAddFolder}
-        onSelectEpisode={(id) => selectEpisodeForPreview(id)}
+        onSelectEpisode={(id) => playbackService.selectEpisodeForPreview(id)}
       />
 
       <!-- Main Center: Preview -->
@@ -326,7 +275,7 @@
     <!-- Bottom Section: Timeline -->
     <div class="bottom-section">
       <Timeline
-        onSelectSegment={(episodeId, segmentId) => selectEpisodeForPreview(episodeId, segmentId)}
+        onSelectSegment={(episodeId, segmentId) => playbackService.selectEpisodeForPreview(episodeId, segmentId)}
       />
     </div>
   {/if}
@@ -351,7 +300,6 @@
     background: var(--bg-main);
   }
 
-  /* Welcome Screen */
   .welcome-screen {
     flex: 1;
     display: flex;
@@ -422,7 +370,6 @@
     margin-top: 20px;
   }
 
-  /* Editor Layout */
   .top-section {
     display: flex;
     flex: 1;
@@ -471,7 +418,6 @@
     overflow-y: auto;
   }
 
-  /* Segment info strip */
   .segment-info {
     display: flex;
     gap: 6px;
@@ -491,7 +437,6 @@
     text-overflow: ellipsis;
   }
 
-  /* Subtitle Metadata */
   .subtitle-list {
     display: flex;
     flex-direction: column;
@@ -537,48 +482,33 @@
     background: rgba(255, 255, 255, 0.1);
     padding: 1px 5px;
     border-radius: 3px;
-    color: var(--text-muted);
-  }
-
-  .track-details {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
   }
 
   .detail {
-    font-size: 0.75rem;
-    color: var(--text-main);
-  }
-
-  .detail span {
+    font-size: 0.7rem;
     color: var(--text-muted);
-    margin-right: 4px;
+    margin: 2px 0;
+  }
+  .detail span {
+    color: var(--text-dim);
+    width: 42px;
+    display: inline-block;
   }
 
   .bottom-section {
-    height: 300px;
-    display: flex;
-    flex-direction: column;
+    height: 200px;
     border-top: 1px solid var(--border-color);
+    background: var(--bg-panel);
   }
 
-  .muted {
-    color: var(--text-muted);
-    font-size: 0.85em;
-  }
-  .mt-2 {
-    margin-top: 8px;
-  }
+  .muted { color: var(--text-muted); font-size: 0.85rem; }
+  .mt-2 { margin-top: 8px; }
 
-  /* Processing Overlay */
+  /* Processing overlay */
   .processing-overlay {
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    background: rgba(0, 0, 0, 0.75);
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -586,41 +516,35 @@
   }
 
   .processing-card {
-    background: var(--bg-panel, #161b22);
-    border: 1px solid var(--border-color, #30363d);
-    padding: 30px 45px;
-    border-radius: 8px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 40px 50px;
     text-align: center;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 12px;
+    min-width: 250px;
   }
 
   .spinner {
-    width: 36px;
-    height: 36px;
-    border: 3.5px solid rgba(255, 255, 255, 0.1);
-    border-top-color: var(--accent-blue, #58a6ff);
+    width: 40px;
+    height: 40px;
+    border: 4px solid var(--border-color);
+    border-top-color: var(--accent-blue);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
+    margin: 0 auto 16px;
   }
 
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   .processing-label {
-    font-size: 1.05rem;
-    font-weight: 600;
-    color: var(--text-main, #e6edf3);
-    font-family: var(--font-mono, monospace);
+    font-size: 1rem;
+    color: var(--text-main);
+    font-weight: 500;
   }
 
   .processing-sub {
     font-size: 0.8rem;
-    color: var(--text-muted, #8b949e);
-    font-family: var(--font-mono, monospace);
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
+    color: var(--text-muted);
+    margin-top: 4px;
   }
 </style>
