@@ -5,6 +5,7 @@
   import { projectStore } from '../lib/stores/project_store.svelte';
   import { episodeStore } from '../lib/stores/episode_store.svelte';
   import { segmentStore } from '../lib/stores/segment_store.svelte';
+  import { historyStore } from '../lib/stores/history_store.svelte';
   import { processingStore } from '../lib/stores/processing_store.svelte';
   import { playbackStore } from '../lib/stores/playback_store.svelte';
   import { tauriCommands } from '../lib/tauri_commands';
@@ -104,19 +105,19 @@
       case e.key.toLowerCase() === 'b' && e.ctrlKey:
         e.preventDefault();
         runHeavyAction('Splitting Segment...', () => {
-          projectStore.splitSegment(playbackStore.playhead_ms);
+          segmentStore.splitSegment(playbackStore.playhead_ms);
         });
         break;
       case e.key.toLowerCase() === 'q' && !e.ctrlKey:
         e.preventDefault();
         runHeavyAction('Trimming Left...', () => {
-          projectStore.deleteLeft(playbackStore.playhead_ms);
+          segmentStore.deleteLeft(playbackStore.playhead_ms);
         });
         break;
       case e.key.toLowerCase() === 'w' && !e.ctrlKey:
         e.preventDefault();
         runHeavyAction('Trimming Right...', () => {
-          projectStore.deleteRight(playbackStore.playhead_ms);
+          segmentStore.deleteRight(playbackStore.playhead_ms);
         });
         break;
       case e.key === 'Delete':
@@ -126,16 +127,16 @@
             playbackStore.playhead_ms >= s.timeline_offset_ms &&
             playbackStore.playhead_ms < s.timeline_offset_ms + (s.source_end_ms - s.source_start_ms)
           );
-          if (targetSeg) projectStore.softDeleteSegment(targetSeg.id);
+          if (targetSeg) segmentStore.softDeleteSegment(targetSeg.id);
         });
         break;
       case e.key.toLowerCase() === 'z' && e.ctrlKey:
         e.preventDefault();
-        runHeavyAction('Undoing...', () => projectStore.smartUndo());
+        runHeavyAction('Undoing...', () => historyStore.smartUndo());
         break;
       case e.key.toLowerCase() === 'y' && e.ctrlKey:
         e.preventDefault();
-        runHeavyAction('Redoing...', () => projectStore.smartRedo());
+        runHeavyAction('Redoing...', () => historyStore.smartRedo());
         break;
     }
   }

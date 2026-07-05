@@ -1,5 +1,8 @@
 import type { VideoMetadata, EpisodeSegment, HistorySnapshot } from "../domain";
 import { HistoryService } from "../services/history_service";
+import { segmentStore } from "./segment_store.svelte";
+import { episodeStore } from "./episode_store.svelte";
+import { subtitleStore } from "./subtitle_store.svelte";
 
 class HistoryStore {
   private historyService = new HistoryService();
@@ -50,6 +53,49 @@ class HistoryStore {
 
   canRedoSegment(): boolean {
     return this.historyService.canRedoSegment();
+  }
+
+  smartUndo() {
+    if (this.canUndoSegment()) {
+      const prev = this.undoSegment();
+      if (prev) {
+        this.pushCurrentToSegFuture(segmentStore.segments);
+        segmentStore.segments = prev;
+        segmentStore.recalculateOffsets();
+        return;
+      }
+    }
+    const snapshot = this.undoFull();
+    if (snapshot) this.restoreSnapshot(snapshot);
+  }
+
+  smartRedo() {
+    if (this.canRedoSegment()) {
+      const next = this.redoSegment();
+      if (next) {
+        this.pushCurrentToSegStack(segmentStore.segments);
+        segmentStore.segments = next;
+        segmentStore.recalculateOffsets();
+        return;
+      }
+    }
+    const snapshot = this.redoFull();
+    if (snapshot) this.restoreSnapshot(snapshot);
+  }
+
+  private restoreSnapshot(snapshot: {
+    episodes: VideoMetadata[];
+    segments: EpisodeSegment[];
+    selectedEpisodeId: string | null;
+    selectedSegmentId: string | null;
+    selectedSubtitleTracks: Record<string, number | null>;
+  }) {
+    episodeStore.episodes = snapshot.episodes;
+    segmentStore.segments = snapshot.segments;
+    episodeStore.selectedEpisodeId = snapshot.selectedEpisodeId;
+    segmentStore.selectedSegmentId = snapshot.selectedSegmentId;
+    subtitleStore.selectedSubtitleTracks = snapshot.selectedSubtitleTracks;
+    segmentStore.recalculateOffsets();
   }
 
   clear() {

@@ -1,5 +1,6 @@
 import type { EpisodeSegment } from "../domain";
 import { SegmentService, type SegmentEditResult } from "../services/segment_service";
+import { historyStore } from "./history_store.svelte";
 
 class SegmentStore {
   segments = $state<EpisodeSegment[]>([]);
@@ -33,23 +34,39 @@ class SegmentStore {
     );
   }
 
-  splitSegment(global_ms: number, onSave: () => void): SegmentEditResult | null {
-    return this.segmentService.splitSegment(this.segments, global_ms, onSave);
+  splitSegment(global_ms: number) {
+    const result = this.segmentService.splitSegment(
+      this.segments, global_ms,
+      () => historyStore.saveSegmentSnapshot(this.segments),
+    );
+    if (result) this.applySegmentEdit(result);
   }
 
-  deleteLeft(global_ms: number, onSave: () => void): SegmentEditResult | null {
-    return this.segmentService.deleteLeft(this.segments, global_ms, this.selectedSegmentId, onSave);
+  deleteLeft(global_ms: number) {
+    const result = this.segmentService.deleteLeft(
+      this.segments, global_ms, this.selectedSegmentId,
+      () => historyStore.saveSegmentSnapshot(this.segments),
+    );
+    if (result) this.applySegmentEdit(result);
   }
 
-  deleteRight(global_ms: number, onSave: () => void): SegmentEditResult | null {
-    return this.segmentService.deleteRight(this.segments, global_ms, this.selectedSegmentId, onSave);
+  deleteRight(global_ms: number) {
+    const result = this.segmentService.deleteRight(
+      this.segments, global_ms, this.selectedSegmentId,
+      () => historyStore.saveSegmentSnapshot(this.segments),
+    );
+    if (result) this.applySegmentEdit(result);
   }
 
-  softDeleteSegment(segmentId: string, onSave: () => void): SegmentEditResult | null {
-    return this.segmentService.softDeleteSegment(this.segments, segmentId, this.selectedSegmentId, onSave);
+  softDeleteSegment(segmentId: string) {
+    const result = this.segmentService.softDeleteSegment(
+      this.segments, segmentId, this.selectedSegmentId,
+      () => historyStore.saveSegmentSnapshot(this.segments),
+    );
+    if (result) this.applySegmentEdit(result);
   }
 
-  applySegmentEdit(result: SegmentEditResult) {
+  private applySegmentEdit(result: SegmentEditResult) {
     if (result.clearedSelectionId && this.selectedSegmentId === result.clearedSelectionId) {
       this.selectedSegmentId = null;
     }
