@@ -2,6 +2,8 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { tauriCommands } from '../../lib/tauri_commands';
   import { projectStore } from '../../lib/stores/project_store.svelte';
+  import { episodeStore } from '../../lib/stores/episode_store.svelte';
+  import { segmentStore } from '../../lib/stores/segment_store.svelte';
   import { playbackStore } from '../../lib/stores/playback_store.svelte';
   import Timeline from '../../lib/components/timeline/Timeline.svelte';
 
@@ -87,7 +89,7 @@
     try {
       const metadata = await tauriCommands.importFolder(folderPath);
       projectStore.addEpisodes(metadata);
-      episodeCount = projectStore.episodes.length;
+      episodeCount = episodeStore.episodes.length;
     } catch (err) {
       addLog(`Import ERROR: ${err}`);
       running = false;
@@ -258,9 +260,9 @@
   {/if}
 
   <!-- Live Timeline Preview -->
-  {#if projectStore.episodes.length > 0}
+  {#if episodeStore.episodes.length > 0}
     <div class="timeline-preview">
-      <h2>Timeline Preview ({projectStore.activeSegments.length} segments)</h2>
+      <h2>Timeline Preview ({segmentStore.activeSegments.length} segments)</h2>
       <div class="timeline-wrap">
         <Timeline onSelectSegment={() => {}} />
       </div>

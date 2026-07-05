@@ -4,6 +4,8 @@
   import { onMount } from 'svelte';
   import { tauriCommands } from '../../tauri_commands';
   import { projectStore } from '../../stores/project_store.svelte';
+  import { episodeStore } from '../../stores/episode_store.svelte';
+  import { processingStore } from '../../stores/processing_store.svelte';
 
   let importing = $state(false);
   let isDragging = $state(false);
@@ -48,19 +50,19 @@
   });
 
   async function processFiles(paths: string[]) {
-    if (projectStore.importing) return;
+    if (processingStore.importing) return;
 
     const validExtensions = ['.mkv', '.mp4'];
     const supportedPaths = paths.filter(p => 
       validExtensions.some(ext => p.toLowerCase().endsWith(ext))
     );
     
-    const newPaths = supportedPaths.filter(p => !projectStore.episodes.some(e => e.path === p));
+    const newPaths = supportedPaths.filter(p => !episodeStore.episodes.some(e => e.path === p));
     if (newPaths.length === 0) return;
 
-    projectStore.importing = true;
-    projectStore.importProgress = 0;
-    projectStore.importTotal = newPaths.length;
+    processingStore.importing = true;
+    processingStore.importProgress = 0;
+    processingStore.importTotal = newPaths.length;
 
     try {
       for (let i = 0; i < newPaths.length; i++) {
@@ -68,12 +70,12 @@
           if (metadataList && metadataList.length > 0) {
               projectStore.addEpisodes(metadataList);
           }
-          projectStore.importProgress = i + 1;
+          processingStore.importProgress = i + 1;
       }
     } catch (e) {
       console.error("Import failed:", e);
     } finally {
-      projectStore.importing = false;
+      processingStore.importing = false;
     }
   }
 
@@ -97,12 +99,12 @@
 </script>
 
 <!-- Global Overlay: Only shows when dragging or importing -->
-<div class="drop-zone-overlay {projectStore.importing ? 'active importing' : ''} {isDragging ? 'active dragging' : ''}">
-  {#if projectStore.importing}
+<div class="drop-zone-overlay {processingStore.importing ? 'active importing' : ''} {isDragging ? 'active dragging' : ''}">
+  {#if processingStore.importing}
     <div class="loader">
-      <div class="loader-text">Importing... {projectStore.importProgress} / {projectStore.importTotal}</div>
+      <div class="loader-text">Importing... {processingStore.importProgress} / {processingStore.importTotal}</div>
       <div class="progress-bar">
-        <div class="progress-fill" style="width: {(projectStore.importProgress / projectStore.importTotal) * 100}%"></div>
+        <div class="progress-fill" style="width: {(processingStore.importProgress / processingStore.importTotal) * 100}%"></div>
       </div>
     </div>
   {:else if isDragging}

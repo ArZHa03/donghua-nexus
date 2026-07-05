@@ -1,5 +1,5 @@
 import type { VideoMetadata, EpisodeSegment } from "../domain";
-import { EpisodeService, type RemoveEpisodeResult } from "../services/episode_service";
+import type { RemoveEpisodeResult } from "../services/episode_service";
 import { episodeStore } from "./episode_store.svelte";
 import { segmentStore } from "./segment_store.svelte";
 import { historyStore } from "./history_store.svelte";
@@ -15,8 +15,6 @@ class ProjectStore {
   processingStore = processingStore;
   subtitleStore = subtitleStore;
 
-  // ── Backward-compatible state accessors (delegate to child stores) ────────
-
   project_title = $state("Untitled Project");
 
   get episodes() { return this.episodeStore.episodes; }
@@ -25,78 +23,27 @@ class ProjectStore {
   get segments() { return this.segmentStore.segments; }
   set segments(v) { this.segmentStore.segments = v; }
 
-  get importing() { return this.processingStore.importing; }
-  set importing(v) { this.processingStore.importing = v; }
-
-  get importProgress() { return this.processingStore.importProgress; }
-  set importProgress(v) { this.processingStore.importProgress = v; }
-
-  get importTotal() { return this.processingStore.importTotal; }
-  set importTotal(v) { this.processingStore.importTotal = v; }
-
-  get isProcessing() { return this.processingStore.isProcessing; }
-  set isProcessing(v) { this.processingStore.isProcessing = v; }
-
-  get processingLabel() { return this.processingStore.processingLabel; }
-  set processingLabel(v) { this.processingStore.processingLabel = v; }
-
-  get processingDetails() { return this.processingStore.processingDetails; }
-  set processingDetails(v) { this.processingStore.processingDetails = v; }
-
   get selectedEpisodeId() { return this.episodeStore.selectedEpisodeId; }
   set selectedEpisodeId(v) { this.episodeStore.selectedEpisodeId = v; }
 
   get selectedSegmentId() { return this.segmentStore.selectedSegmentId; }
   set selectedSegmentId(v) { this.segmentStore.selectedSegmentId = v; }
 
-  get selectedSubtitleTracks() { return this.subtitleStore.selectedSubtitleTracks; }
-  set selectedSubtitleTracks(v) { this.subtitleStore.selectedSubtitleTracks = v; }
-
-  // ── Backward-compatible derived getters ───────────────────────────────────
-
-  get selectedEpisode(): VideoMetadata | null {
-    return this.episodeStore.selectedEpisode;
-  }
-
-  get selectedSegment(): EpisodeSegment | null {
-    return this.segmentStore.selectedSegment;
-  }
-
-  get activeSegments(): EpisodeSegment[] {
-    return this.segmentStore.activeSegments;
-  }
-
   get segmentsByEpisode(): Map<string, EpisodeSegment[]> {
     return this.segmentStore.segmentsByEpisode;
   }
 
-  get total_duration_ms(): number {
-    return this.segmentStore.total_duration_ms;
-  }
-
-  get total_file_size_bytes(): number {
-    return this.episodeStore.total_file_size_bytes;
-  }
-
   // ── Episode management ────────────────────────────────────────────────────
 
-  private episodeService: EpisodeService = new EpisodeService();
-
   addEpisodes(files: VideoMetadata[]) {
-    const result = this.episodeService.addEpisodes(
-      this.episodeStore.episodes, this.segmentStore.segments,
-      files, this.episodeStore.selectedEpisodeId,
-    );
-    this.episodeStore.episodes = result.episodes;
+    const result = this.episodeStore.addEpisodes(files, this.segmentStore.segments);
+    this.episodeStore.applyAddEpisodesResult(result);
     this.segmentStore.segments = result.segments;
-    this.episodeStore.selectedEpisodeId = result.newSelectedEpisodeId;
     this.segmentStore.selectedSegmentId = result.newSelectedSegmentId;
     this.segmentStore.recalculateOffsets();
   }
 
   async removeEpisode(episodeId: string) {
-    if (!this.episodeStore.episodes.some(e => e.id === episodeId)) return;
-
     this.processingStore.processingLabel = "Removing Episode...";
     this.processingStore.isProcessing = true;
     this.processingStore.processingDetails = null;
@@ -104,12 +51,11 @@ class ProjectStore {
 
     try {
       this.saveSnapshot();
-      const result = this.episodeService.removeEpisode(
-        this.episodeStore.episodes, this.segmentStore.segments,
-        episodeId,
-        this.episodeStore.selectedEpisodeId, this.segmentStore.selectedSegmentId,
-        this.subtitleStore.selectedSubtitleTracks,
+      const result = this.episodeStore.removeEpisode(
+        episodeId, this.segmentStore.segments,
+        this.segmentStore.selectedSegmentId, this.subtitleStore.selectedSubtitleTracks,
       );
+      if (!result) return;
       this.applyRemoveResult(result);
     } finally {
       this.processingStore.isProcessing = false;
@@ -119,10 +65,9 @@ class ProjectStore {
   }
 
   private applyRemoveResult(result: RemoveEpisodeResult) {
-    this.episodeStore.episodes = result.episodes;
+    this.episodeStore.applyRemoveEpisodeResult(result);
     this.segmentStore.segments = result.segments;
     this.subtitleStore.selectedSubtitleTracks = result.selectedSubtitleTracks;
-    this.episodeStore.selectedEpisodeId = result.newSelectedEpisodeId;
     this.segmentStore.selectedSegmentId = result.newSelectedSegmentId;
     this.segmentStore.recalculateOffsets();
   }

@@ -1,5 +1,7 @@
 <script lang="ts">
   import { projectStore } from '../../stores/project_store.svelte';
+  import { episodeStore } from '../../stores/episode_store.svelte';
+  import { segmentStore } from '../../stores/segment_store.svelte';
   import { playbackStore } from '../../stores/playback_store.svelte';
   import { tauriCommands } from '../../tauri_commands';
 
@@ -50,12 +52,12 @@
 <div class="episode-list">
   <div class="header">
     <div class="header-top">
-      <h3>Episodes ({projectStore.episodes.length})</h3>
+      <h3>Episodes ({episodeStore.episodes.length})</h3>
       <button class="clear-btn" onclick={handleClearProject}>Clear Project</button>
     </div>
     <div class="totals-row">
-      <span class="total-badge" title="Total Duration">⏱ {formatDuration(projectStore.total_duration_ms)}</span>
-      <span class="total-badge" title="Total File Size">💾 {formatSize(projectStore.total_file_size_bytes)}</span>
+      <span class="total-badge" title="Total Duration">⏱ {formatDuration(segmentStore.total_duration_ms)}</span>
+      <span class="total-badge" title="Total File Size">💾 {formatSize(episodeStore.total_file_size_bytes)}</span>
     </div>
     <div class="toolbar">
       <button class="tool-btn" onclick={onAddFiles}>+ Add Files</button>
@@ -64,9 +66,9 @@
   </div>
   
   <div class="list">
-    {#each projectStore.episodes as ep}
+    {#each episodeStore.episodes as ep}
       <div 
-        class="episode-item {projectStore.selectedEpisodeId === ep.id ? 'selected' : ''}" 
+        class="episode-item {episodeStore.selectedEpisodeId === ep.id ? 'selected' : ''}" 
         title={ep.path}
         onclick={() => onSelectEpisode(ep.id)}
         role="button"

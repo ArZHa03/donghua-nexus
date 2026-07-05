@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { projectStore } from '../../stores/project_store.svelte';
+  import { episodeStore } from '../../stores/episode_store.svelte';
+  import { segmentStore } from '../../stores/segment_store.svelte';
   import { playbackStore } from '../../stores/playback_store.svelte';
   import { loadingStore } from '../../stores/loading_store.svelte';
   import type { EpisodeSegment } from '../../types';
@@ -33,7 +34,7 @@
   ];
 
   function episodeHue(episodeId: string): number {
-    const idx = projectStore.episodes.findIndex(e => e.id === episodeId);
+    const idx = episodeStore.episodes.findIndex(e => e.id === episodeId);
     return EPISODE_HUES[idx % EPISODE_HUES.length];
   }
 
@@ -54,14 +55,14 @@
   // ── Derived dimensions ────────────────────────────────────────────────────
   // ── Derived dimensions based on zoom mode ─────────────────────────────────
   let scale = $derived.by(() => {
-    const totalDuration = projectStore.total_duration_ms;
+    const totalDuration = segmentStore.total_duration_ms;
     const padding = 40;
     const availableWidth = Math.max(100, clientWidth - padding);
 
     if (playbackStore.zoom_mode === 'fit-entire') {
       return totalDuration > 0 ? (availableWidth / totalDuration) : BASE_PX_PER_MS;
     } else if (playbackStore.zoom_mode === 'fit-episode') {
-      const epDur = projectStore.selectedEpisode?.duration_ms;
+      const epDur = episodeStore.selectedEpisode?.duration_ms;
       if (epDur && epDur > 0) return availableWidth / epDur;
       return totalDuration > 0 ? (availableWidth / totalDuration) : BASE_PX_PER_MS;
     } else {
@@ -69,7 +70,7 @@
     }
   });
 
-  let timelineWidth = $derived(projectStore.total_duration_ms * scale);
+  let timelineWidth = $derived(segmentStore.total_duration_ms * scale);
   let playheadPos   = $derived(playbackStore.playhead_ms * scale);
 
   // ── Virtualization: only render clips visible in the scroll viewport ──────
@@ -78,7 +79,7 @@
     const viewStart = scrollLeft - buffer;
     const viewEnd   = scrollLeft + clientWidth + buffer;
 
-    return projectStore.activeSegments.filter(seg => {
+    return segmentStore.activeSegments.filter(seg => {
       const left  = seg.timeline_offset_ms * scale;
       const right = left + (seg.source_end_ms - seg.source_start_ms) * scale;
       return right >= viewStart && left <= viewEnd;
@@ -89,13 +90,13 @@
 
   /** Returns the 1-based segment index within its episode (among active segments only). */
   function segmentIndex(seg: EpisodeSegment): number {
-    const epSegs = projectStore.segmentsByEpisode.get(seg.episode_id) ?? [];
+    const epSegs = segmentStore.segmentsByEpisode.get(seg.episode_id) ?? [];
     return epSegs.findIndex(s => s.id === seg.id) + 1;
   }
 
   /** Returns the 1-based episode index across all episodes. */
   function episodeIndex(episodeId: string): number {
-    return projectStore.episodes.findIndex(e => e.id === episodeId) + 1;
+    return episodeStore.episodes.findIndex(e => e.id === episodeId) + 1;
   }
 
   // ── Time formatting ───────────────────────────────────────────────────────
@@ -109,7 +110,7 @@
 
   // ── Ruler tick generation ─────────────────────────────────────────────────
   let rulerTicks = $derived.by(() => {
-    if (projectStore.total_duration_ms === 0) return [];
+    if (segmentStore.total_duration_ms === 0) return [];
     
     // Choose tick interval based on zoom so ruler stays readable
     const targetTickPx = 120;
@@ -122,7 +123,7 @@
     const interval = niceIntervals.find(i => i >= msPerTick_raw) ?? 86400000;
 
     const ticks: { ms: number; label: string }[] = [];
-    for (let ms = 0; ms <= projectStore.total_duration_ms; ms += interval) {
+    for (let ms = 0; ms <= segmentStore.total_duration_ms; ms += interval) {
       ticks.push({ ms, label: formatTime(ms) });
     }
     return ticks;
@@ -156,7 +157,7 @@
   function handleTimelineClick(e: MouseEvent) {
     if (!containerRef) return;
     const clickX = e.clientX - containerRef.getBoundingClientRect().left + scrollLeft;
-    const ms     = Math.max(0, Math.min(clickX / scale, projectStore.total_duration_ms));
+    const ms     = Math.max(0, Math.min(clickX / scale, segmentStore.total_duration_ms));
     playbackStore.setPlayhead(ms);
     // ← deliberately NO selection change here
   }
@@ -169,7 +170,7 @@
     e.stopPropagation(); // Prevent handleTimelineClick from also firing
     if (!containerRef) return;
     const clickX = e.clientX - containerRef.getBoundingClientRect().left + scrollLeft;
-    const ms     = Math.max(0, Math.min(clickX / scale, projectStore.total_duration_ms));
+    const ms     = Math.max(0, Math.min(clickX / scale, segmentStore.total_duration_ms));
     playbackStore.setPlayhead(ms);
     onSelectSegment(seg.episode_id, seg.id);
   }
@@ -210,7 +211,7 @@
     </div>
 
     <!-- ── Playhead ──────────────────────────────────────────────────────── -->
-    {#if projectStore.total_duration_ms > 0}
+    {#if segmentStore.total_duration_ms > 0}
       <div class="playhead" style="transform: translateX({playheadPos}px);">
         <div class="playhead-line"></div>
         <div class="playhead-label">{formatTime(playbackStore.playhead_ms)}</div>
@@ -223,8 +224,8 @@
         {@const widthPx    = (seg.source_end_ms - seg.source_start_ms) * scale}
         {@const leftPx     = seg.timeline_offset_ms * scale}
         {@const hue        = episodeHue(seg.episode_id)}
-        {@const isEpActive = seg.episode_id === projectStore.selectedEpisodeId}
-        {@const isSegSel   = seg.id === projectStore.selectedSegmentId}
+        {@const isEpActive = seg.episode_id === episodeStore.selectedEpisodeId}
+        {@const isSegSel   = seg.id === segmentStore.selectedSegmentId}
         {@const epIdx      = episodeIndex(seg.episode_id)}
         {@const segIdx     = segmentIndex(seg)}
 
@@ -266,7 +267,7 @@
   <button 
     onclick={() => handleSetZoomMode('fit-episode')} 
     class:active={playbackStore.zoom_mode === 'fit-episode'}
-    disabled={!projectStore.selectedEpisodeId}
+    disabled={!episodeStore.selectedEpisodeId}
   >
     Fit Episode
   </button>

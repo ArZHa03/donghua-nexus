@@ -3,6 +3,9 @@
   import { listen } from '@tauri-apps/api/event';
   import { open } from '@tauri-apps/plugin-dialog';
   import { projectStore } from '../lib/stores/project_store.svelte';
+  import { episodeStore } from '../lib/stores/episode_store.svelte';
+  import { segmentStore } from '../lib/stores/segment_store.svelte';
+  import { processingStore } from '../lib/stores/processing_store.svelte';
   import { playbackStore } from '../lib/stores/playback_store.svelte';
   import { tauriCommands } from '../lib/tauri_commands';
   import { PlaybackService } from '../lib/services/playback_service';
@@ -22,7 +25,7 @@
   // ── Import handlers ───────────────────────────────────────────────────────
 
   async function handleAddFiles() {
-    if (projectStore.importing) return;
+    if (processingStore.importing) return;
 
     const selected = await open({
       multiple: true,
@@ -30,60 +33,60 @@
     });
     if (!Array.isArray(selected) || selected.length === 0) return;
 
-    projectStore.importing = true;
-    projectStore.importProgress = 0;
-    projectStore.importTotal = selected.length;
+    processingStore.importing = true;
+    processingStore.importProgress = 0;
+    processingStore.importTotal = selected.length;
     try {
       for (let i = 0; i < selected.length; i++) {
         const metadata = await tauriCommands.importVideos([selected[i]]);
         projectStore.addEpisodes(metadata);
-        projectStore.importProgress = i + 1;
+        processingStore.importProgress = i + 1;
       }
     } catch (e) {
       console.error("Import failed:", e);
     } finally {
-      projectStore.importing = false;
+      processingStore.importing = false;
     }
   }
 
   async function handleAddFolder() {
-    if (projectStore.importing) return;
+    if (processingStore.importing) return;
 
     const selected = await open({ directory: true });
     if (!selected || typeof selected !== 'string') return;
 
-    projectStore.importing = true;
+    processingStore.importing = true;
     try {
       const metadata = await tauriCommands.importFolder(selected);
       projectStore.addEpisodes(metadata);
     } catch (e) {
       console.error("Folder import failed:", e);
     } finally {
-      projectStore.importing = false;
+      processingStore.importing = false;
     }
   }
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
 
   async function runHeavyAction(label: string, action: () => void) {
-    projectStore.processingLabel = label;
-    projectStore.isProcessing = true;
+    processingStore.processingLabel = label;
+    processingStore.isProcessing = true;
     await new Promise(resolve => setTimeout(resolve, 30));
     try {
       action();
     } finally {
-      projectStore.isProcessing = false;
-      projectStore.processingLabel = '';
+      processingStore.isProcessing = false;
+      processingStore.processingLabel = '';
     }
   }
 
   async function handleGlobalKeydown(e: KeyboardEvent) {
-    if (projectStore.isProcessing) {
+    if (processingStore.isProcessing) {
       e.preventDefault();
       return;
     }
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-    if (projectStore.episodes.length === 0) return;
+    if (episodeStore.episodes.length === 0) return;
 
     switch (true) {
       case e.key === ' ' && !e.ctrlKey:
@@ -119,7 +122,7 @@
       case e.key === 'Delete':
         e.preventDefault();
         runHeavyAction('Deleting Segment...', () => {
-          const targetSeg = projectStore.activeSegments.find(s =>
+          const targetSeg = segmentStore.activeSegments.find(s =>
             playbackStore.playhead_ms >= s.timeline_offset_ms &&
             playbackStore.playhead_ms < s.timeline_offset_ms + (s.source_end_ms - s.source_start_ms)
           );
@@ -153,7 +156,7 @@
   // ── Unload MPV when all episodes are removed ──────────────────────────────
 
   $effect(() => {
-    if (projectStore.episodes.length === 0) {
+    if (episodeStore.episodes.length === 0) {
       playbackService.unloadIfEmpty(0);
     }
   });
@@ -167,18 +170,18 @@
 
 <DropZone />
 
-{#if projectStore.isProcessing}
+{#if processingStore.isProcessing}
   <div class="processing-overlay">
     <div class="processing-card">
       <div class="spinner"></div>
-      <div class="processing-label">{projectStore.processingLabel}</div>
+      <div class="processing-label">{processingStore.processingLabel}</div>
       <div class="processing-sub">Please Wait</div>
     </div>
   </div>
 {/if}
 
 <div class="editor-layout">
-  {#if projectStore.episodes.length === 0}
+  {#if episodeStore.episodes.length === 0}
     <div class="welcome-screen">
       <div class="welcome-content">
         <h1>Donghua Nexus</h1>
@@ -224,13 +227,13 @@
         <div class="panel-content">
           {#if selectedPanel === 'subtitle'}
             <h3>Subtitle Tracks</h3>
-            {#if projectStore.selectedEpisode}
+            {#if episodeStore.selectedEpisode}
               <div class="segment-info">
                 <span class="info-label">Episode:</span>
-                <span class="info-value">{projectStore.selectedEpisode.filename}</span>
+                <span class="info-value">{episodeStore.selectedEpisode.filename}</span>
               </div>
-              {#if projectStore.selectedSegment}
-                {@const seg = projectStore.selectedSegment}
+              {#if segmentStore.selectedSegment}
+                {@const seg = segmentStore.selectedSegment}
                 <div class="segment-info">
                   <span class="info-label">Segment:</span>
                   <span class="info-value">
@@ -239,7 +242,7 @@
                 </div>
               {/if}
               <div class="subtitle-list">
-                {#each projectStore.selectedEpisode.subtitle_tracks as track, i}
+                {#each episodeStore.selectedEpisode.subtitle_tracks as track, i}
                   <div class="track-item">
                     <div class="track-header">
                       <span class="track-num">{i + 1}</span>
@@ -254,7 +257,7 @@
                     </div>
                   </div>
                 {/each}
-                {#if projectStore.selectedEpisode.subtitle_tracks.length === 0}
+                {#if episodeStore.selectedEpisode.subtitle_tracks.length === 0}
                   <p class="muted">No subtitles detected.</p>
                 {/if}
               </div>
