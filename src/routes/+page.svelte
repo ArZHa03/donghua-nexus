@@ -146,7 +146,17 @@
   onMount(() => {
     let unlisten: (() => void) | null = null;
     listen<Record<string, unknown>>('mpv-event', (event) => {
-      playbackStore.handleMpvEvent(event.payload);
+      const payload = event.payload;
+      playbackStore.handleMpvEvent(payload);
+      if (payload.event === 'file-loaded') {
+        playbackService.notifyFileLoaded();
+      } else if (payload.event === 'listener-error') {
+        const errMsg = (payload as any).error ?? 'unknown';
+        const listenerId = (payload as any).listener_id ?? '?';
+        console.error('[LIFECYCLE] +page.svelte received listener#' + listenerId + ' error:', errMsg);
+        console.error('[LIFECYCLE]   notifying playbackService of error');
+        playbackService.notifyError();
+      }
     }).then(fn => { unlisten = fn; });
     return () => {
       playbackService.cancelDebounce();

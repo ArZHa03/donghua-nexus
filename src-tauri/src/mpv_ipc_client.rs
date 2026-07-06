@@ -19,14 +19,20 @@ impl MpvIpcClient {
     pub async fn start_and_connect() -> Result<Self, String> {
         let pipe_name = r"\\.\pipe\donghua-nexus-mpv";
 
-        if let Ok(client) = ClientOptions::new().open(pipe_name) {
+        // Try to connect to existing MPV instance
+        if let Ok(pipe) = ClientOptions::new().open(pipe_name) {
+            eprintln!("[LIFECYCLE] start_and_connect: connected to existing MPV via {}", pipe_name);
             return Ok(Self {
-                pipe: Arc::new(Mutex::new(client)),
+                pipe: Arc::new(Mutex::new(pipe)),
                 pid: None,
                 hwnd: None,
                 request_id: AtomicU64::new(1),
             });
         }
+
+        eprintln!("[LIFECYCLE] start_and_connect: spawning new MPV process");
+        eprintln!("[LIFECYCLE]   path={:?}", MPV_PATH);
+        eprintln!("[LIFECYCLE]   ipc={}", pipe_name);
 
         let child = Command::new(MPV_PATH)
             .args([
@@ -43,15 +49,20 @@ impl MpvIpcClient {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("Failed to spawn MPV: {}", e))?;
+            .map_err(|e| {
+                eprintln!("[LIFECYCLE]   spawn failed: {}", e);
+                format!("Failed to spawn MPV: {}", e)
+            })?;
 
         let pid = child.id();
+        eprintln!("[LIFECYCLE]   spawned PID={}", pid);
 
-        for _ in 0..10 {
+        for i in 0..10 {
             sleep(Duration::from_millis(200)).await;
-            if let Ok(client) = ClientOptions::new().open(pipe_name) {
+            if let Ok(pipe) = ClientOptions::new().open(pipe_name) {
+                eprintln!("[LIFECYCLE]   connected after {} retries, PID={}", i + 1, pid);
                 return Ok(Self {
-                    pipe: Arc::new(Mutex::new(client)),
+                    pipe: Arc::new(Mutex::new(pipe)),
                     pid: Some(pid),
                     hwnd: None,
                     request_id: AtomicU64::new(1),
@@ -59,18 +70,21 @@ impl MpvIpcClient {
             }
         }
 
+        eprintln!("[LIFECYCLE]   failed to connect after 10 retries");
         Err("Failed to connect to MPV IPC pipe after retries".into())
     }
 
     /// Open a second named-pipe connection to MPV for the event listener.
     pub async fn open_event_pipe() -> Result<NamedPipeClient, String> {
         let pipe_name = r"\\.\pipe\donghua-nexus-mpv";
-        for _ in 0..5 {
+        for i in 0..5 {
             if let Ok(client) = ClientOptions::new().open(pipe_name) {
+                eprintln!("[LIFECYCLE] open_event_pipe: connected (attempt {})", i + 1);
                 return Ok(client);
             }
             sleep(Duration::from_millis(100)).await;
         }
+        eprintln!("[LIFECYCLE] open_event_pipe: FAILED after 5 attempts");
         Err("Failed to open event pipe to MPV".into())
     }
 
@@ -111,10 +125,30 @@ impl MpvIpcClient {
     pub async fn load_file(&self, path: &str, start_sec: f64) -> Result<(), String> {
         let options = format!("start={:.3},pause=yes", start_sec);
         let cmd = serde_json::json!({
-            "command": ["loadfile", path, "replace", 0, options]
+            "command": ["loadfile", path, "replace", -1, options]
         });
-        self.send_with_response(cmd).await?;
-        Ok(())
+
+        eprintln!("==============================");
+        eprintln!("[MPV LOADFILE]");
+        eprintln!("==============================");
+        eprintln!("Path: {}", path);
+        eprintln!("StartSec: {}", start_sec);
+        eprintln!("Command: {}", serde_json::to_string(&cmd).unwrap());
+
+        match self.send_with_response(cmd).await {
+            Ok(resp) => {
+                let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
+                eprintln!("Response: {}", serde_json::to_string(&resp).unwrap());
+                eprintln!("Parsed error: {}", err);
+                eprintln!("==============================");
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("Raw error: {}", e);
+                eprintln!("==============================");
+                Err(e)
+            }
+        }
     }
 
     pub async fn seek(&self, seconds: f64) -> Result<(), String> {
@@ -174,6 +208,19 @@ impl MpvIpcClient {
         self.observe_property("duration").await
     }
 
+    pub async fn get_mpv_version(&self) -> Result<String, String> {
+        let cmd = serde_json::json!({
+            "command": ["get_property", "mpv-version"]
+        });
+        let resp = self.send_with_response(cmd).await?;
+        let version = resp
+            .get("data")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        Ok(version)
+    }
+
     pub async fn can_write(&self) -> bool {
         let pipe = self.pipe.lock().await;
         pipe.ready(tokio::io::Interest::WRITABLE).await.is_ok()
@@ -207,8 +254,11 @@ async fn read_pipe_line(pipe: &mut NamedPipeClient) -> Result<String, String> {
 pub fn spawn_event_listener(
     mut event_pipe: NamedPipeClient,
     app_handle: tauri::AppHandle,
+    listener_id: u64,
 ) -> tokio::task::JoinHandle<()> {
+    eprintln!("[LIFECYCLE] listener#{}: spawning, thread={:?}", listener_id, std::thread::current().id());
     tokio::spawn(async move {
+        eprintln!("[LIFECYCLE] listener#{}: running (tokio task started)", listener_id);
         loop {
             match read_pipe_line(&mut event_pipe).await {
                 Ok(line) => {
@@ -223,13 +273,22 @@ pub fn spawn_event_listener(
                     }
                 }
                 Err(e) => {
-                    eprintln!("MPV event listener error: {}", e);
+                    let err_str = e.to_string();
+                    eprintln!("[LIFECYCLE] listener#{}: exit — reason: {}", listener_id, err_str);
+                    if err_str.contains("early eof") || err_str.contains("EOF") {
+                        eprintln!("[LIFECYCLE] listener#{}: detected EOF (MPV child probably exited)", listener_id);
+                    } else if err_str.contains("broken pipe") {
+                        eprintln!("[LIFECYCLE] listener#{}: detected broken pipe (MPV child crashed)", listener_id);
+                    } else {
+                        eprintln!("[LIFECYCLE] listener#{}: IO error", listener_id);
+                    }
                     let err_event =
-                        serde_json::json!({"event": "listener-error", "error": e});
+                        serde_json::json!({"event": "listener-error", "error": err_str, "listener_id": listener_id});
                     let _ = app_handle.emit("mpv-event", &err_event);
                     break;
                 }
             }
         }
+        eprintln!("[LIFECYCLE] listener#{}: task ended", listener_id);
     })
 }

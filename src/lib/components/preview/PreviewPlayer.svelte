@@ -33,7 +33,6 @@
     if (!playbackStore.isReady) return;
     try {
       await tauriCommands.mpvTogglePause();
-      playbackStore.togglePlay();
     } catch (err) {
       console.error('MPV toggle pause failed:', err);
       playbackStore.setMpvState('error');

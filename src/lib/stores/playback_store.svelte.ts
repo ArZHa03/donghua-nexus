@@ -18,6 +18,11 @@ class PlaybackStore {
   playhead_ms = $state(0);
   mpv_state   = $state<MpvLifecycle>('not_started');
 
+  /** Source position offset (ms) of the currently loaded segment. */
+  sourceStartMs = $state(0);
+  /** Timeline position (ms) of the currently loaded segment. */
+  timelineOffsetMs = $state(0);
+
   // Timeline Zoom Settings
   zoom_mode   = $state<'fit-entire' | 'fit-episode' | 'manual'>('manual');
   zoom_factor = $state(1.0); // manual scale multiplier
@@ -66,6 +71,14 @@ class PlaybackStore {
     this.playhead_ms = Math.max(0, ms);
   }
 
+  setSourceStartMs(ms: number) {
+    this.sourceStartMs = ms;
+  }
+
+  setTimelineOffsetMs(ms: number) {
+    this.timelineOffsetMs = ms;
+  }
+
   togglePlay() {
     if (this.mpv_state === 'playing') {
       this.mpv_state = 'paused';
@@ -78,6 +91,8 @@ class PlaybackStore {
   reset() {
     this.playhead_ms = 0;
     this.mpv_state   = 'not_started';
+    this.sourceStartMs = 0;
+    this.timelineOffsetMs = 0;
     this.zoom_mode   = 'manual';
     this.zoom_factor = 1.0;
   }
@@ -88,21 +103,26 @@ class PlaybackStore {
     const eventType = event.event as string | undefined;
     if (!eventType) return;
 
+    console.log('[MPV EVENT]', eventType, event);
+
     switch (eventType) {
       case 'file-loaded':
-        // MPV confirmed the file is loaded and ready.
+        console.log('[LIFECYCLE] file-loaded — MPV finished loading, state -> ready');
         this.mpv_state = 'ready';
         break;
 
-      case 'end-file':
-        // Current file was unloaded (e.g. by a new loadfile or stop).
-        // Only reset to not_started if we are NOT in the middle of loading
-        // a new file — otherwise end-file would overwrite the loading state
-        // set by selectEpisodeForPreview.
+      case 'end-file': {
+        const reason = (event as any).reason ?? 'unknown';
+        console.log('[LIFECYCLE] end-file — reason:', reason, 'current state:', this.mpv_state);
         if (this.mpv_state !== 'loading' && this.mpv_state !== 'starting') {
           this.mpv_state = 'not_started';
           this.playhead_ms = 0;
         }
+        break;
+      }
+
+      case 'shutdown':
+        console.log('[LIFECYCLE] shutdown — MPV is shutting down (no state change)');
         break;
 
       case 'property-change': {
@@ -110,17 +130,19 @@ class PlaybackStore {
         const data = event.data;
         if (!name) break;
 
+        console.log('[MPV PROPERTY]', name, '=', data);
+
         switch (name) {
           case 'playback-time': {
-            // data is seconds (float) — convert to ms
             const secs = data as number;
             if (typeof secs === 'number') {
-              this.playhead_ms = Math.max(0, secs * 1000);
+              const sourceMs = secs * 1000;
+              const elapsedSinceStart = Math.max(0, sourceMs - this.sourceStartMs);
+              this.playhead_ms = this.timelineOffsetMs + elapsedSinceStart;
             }
             break;
           }
           case 'pause':
-            // data is boolean: true = paused, false = playing
             if (data === true) {
               if (this.mpv_state === 'playing') {
                 this.mpv_state = 'paused';
@@ -132,23 +154,24 @@ class PlaybackStore {
             }
             break;
           case 'eof-reached':
-            // MPV reached end of file (with --keep-open it stays on last frame)
             if (this.mpv_state === 'playing') {
               this.mpv_state = 'paused';
             }
             break;
           case 'seeking':
-            // MPV is seeking — we could show a brief loading state but
-            // the seek is fast enough that no visible feedback is needed.
             break;
         }
         break;
       }
 
-      case 'listener-error':
-        // Background event listener encountered a pipe error.
+      case 'listener-error': {
+        const errMsg = (event as any).error ?? 'unknown';
+        const listenerId = (event as any).listener_id ?? '?';
+        console.error('[LIFECYCLE] listener#' + listenerId + ' — listener-error:', errMsg);
+        console.error('[LIFECYCLE]   setting mpv_state -> error (listener died)');
         this.mpv_state = 'error';
         break;
+      }
     }
   }
 }
